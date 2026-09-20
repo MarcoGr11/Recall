@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+
+# IDE / local tooling
+.idea/
+.vscode/
+.claude/
+.mcp.json
