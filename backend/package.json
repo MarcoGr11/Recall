@@ -1,0 +1,31 @@
+{
+  "name": "retain-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Retain backend API",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "lint": "eslint src tests",
+    "test": "jest"
+  },
+  "dependencies": {
+    "bullmq": "^6.3.8",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.1",
+    "express": "^5.2.1",
+    "ioredis": "^6.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.23.0",
+    "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.1",
+    "jest": "^30.5.2",
+    "nodemon": "^3.1.14"
+  }
+}
