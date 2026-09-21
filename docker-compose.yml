@@ -6,7 +6,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
-      DATABASE_URL: postgres://${POSTGRES_USER:-retain}:${POSTGRES_PASSWORD:-retain}@postgres:5432/${POSTGRES_DB:-retain}
+      DATABASE_URL: postgres://${POSTGRES_USER:-recall}:${POSTGRES_PASSWORD:-recall}@postgres:5432/${POSTGRES_DB:-recall}
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -15,16 +15,16 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks: [retain]
+    networks: [recall]
 
   postgres:
     image: postgres:16-alpine
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-retain}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-retain}
-      POSTGRES_DB: ${POSTGRES_DB:-retain}
+      POSTGRES_USER: ${POSTGRES_USER:-recall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-recall}
+      POSTGRES_DB: ${POSTGRES_DB:-recall}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -32,7 +32,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    networks: [retain]
+    networks: [recall]
 
   redis:
     image: redis:7-alpine
@@ -45,11 +45,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    networks: [retain]
+    networks: [recall]
 
 volumes:
   postgres_data:
   redis_data:
 
 networks:
-  retain:
+  recall:
