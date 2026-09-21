@@ -1,8 +1,8 @@
 {
-  "name": "retain-backend",
+  "name": "recall-backend",
   "version": "0.1.0",
   "private": true,
-  "description": "Retain backend API",
+  "description": "Recall backend API",
   "main": "src/index.js",
   "engines": {
     "node": ">=22"

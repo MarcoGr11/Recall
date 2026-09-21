@@ -17,4 +17,4 @@ app.use('/api/test-results', require('./routes/test-results'));
 app.use('/api/scenarios', require('./routes/scenarios'));
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Retain backend listening on :${port}`));
+app.listen(port, () => console.log(`Recall backend listening on :${port}`));
