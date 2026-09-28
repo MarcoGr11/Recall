@@ -56,9 +56,10 @@
 
 ```
 Recall/
-├── backend/    # API-сервер
-├── frontend/   # мобільний застосунок (поки порожньо)
-└── docs/       # документація, proposal.md
+├── src/
+│   ├── backend/    # API-сервер
+│   └── frontend/   # мобільний застосунок (поки порожньо)
+└── docs/           # документація, proposal.md
 ```
 
 ## Запуск локально
@@ -74,7 +75,7 @@ docker-compose up --build
 | Redis | `localhost:6379` |
 
 ```bash
-cp backend/.env.example backend/.env
+cp src/backend/.env.example src/backend/.env
 ```
 
 ## Статус проєкту
