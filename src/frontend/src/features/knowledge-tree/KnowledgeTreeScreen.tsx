@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
 import Svg, { Circle, Defs, G, Image, LinearGradient, Path, Rect, Stop, Text as SvgText } from "react-native-svg";
+import FallingLeaves from "./FallingLeaves";
 import { computeTreeLayout, FoliageSprite, LeafSlot, TreeMeta } from "./layout";
 import { masteryFromEase, nextEase, ZONE_COLOR, zoneOf } from "./mastery";
 import { courses, flagshipTopics, Topic } from "./mockData";
@@ -62,6 +63,7 @@ export default function KnowledgeTreeScreen() {
   );
   const [teacher, setTeacher] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
 
   const easeOf = (p: PlacedTopic) => (teacher ? p.topic.groupEase : ease[p.topic.id]);
   const isActive = (p: PlacedTopic) => !teacher || p.isOwn;
@@ -78,7 +80,7 @@ export default function KnowledgeTreeScreen() {
   };
 
   return (
-    <View style={styles.root}>
+    <View style={styles.root} onLayout={e => setSize(e.nativeEvent.layout)}>
       <Svg style={StyleSheet.absoluteFill} width="100%" height="100%" viewBox={`${vb.x} ${vb.y} ${vb.width} ${vb.height}`}>
         <Defs>
           <LinearGradient id="sky" gradientUnits="userSpaceOnUse" x1={0} y1={vb.y} x2={0} y2={vb.y + vb.height}>
@@ -135,6 +137,8 @@ export default function KnowledgeTreeScreen() {
           );
         })}
       </Svg>
+
+      <FallingLeaves layout={layout} width={size.width} height={size.height} />
 
       <View style={styles.toggle}>
         {[false, true].map(t => (
