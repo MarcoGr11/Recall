@@ -11,6 +11,7 @@
 | [2_design.md](2_design.md) | Розділ 2. Проєктування програмної системи |
 | [3_implementation.md](3_implementation.md) | Розділ 3. Програмна реалізація та тестування |
 | [4_conclusions.md](4_conclusions.md) | Висновки |
+| [engineering/](engineering/README.md) | Інженерні нотатки 00–14 (джерела, не артефакти лабораторних робіт) |
 
 ## Календарний план
 
