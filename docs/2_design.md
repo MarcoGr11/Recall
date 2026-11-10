@@ -154,6 +154,286 @@ flowchart TB
 
 ## 2.2. Компонентне моделювання критичного сервісу системи
 
+Критичним сервісом обрано контейнер Backend API: він реалізує більшість функціональних вимог, транзакцію «відповідь + ReviewState» ([SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01)), контроль доступу ([SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05)) і доставку подій у реальному часі ([SRS-NFR-RT-01](./srs.md#srs-nfr-rt-01)). Компоненти організовано за Clean Architecture з чотирма шарами:
+- **Inbound** — адаптери введення: контролери Express, шлюз Socket.io, слухач подій черги;
+- **Core** — сервіси застосунку і доменна логіка; не залежить від Express, pg і BullMQ;
+- **Ports** — інтерфейси сховищ і черги, визначені в Core (Dependency Inversion);
+- **Outbound** — реалізації портів для PostgreSQL, файлового сховища і BullMQ.
+
+Правило залежностей: Inbound → Core → Ports ← Outbound. Контролери звертаються лише до сервісів Core; сервіси Core звертаються лише до портів і до інших сервісів Core. Компоненти створюються і зв'язуються вручну (Dependency Injection через конструктор) в одному місці — CompositionRoot; DI-фреймворк не використовується. SM2Scheduler і QualityScorer є чистими функціями без I/O, що спрощує unit-тестування ([SRS-NFR-MAINT-01](./srs.md#srs-nfr-maint-01)). Протокол аудиту — [17-AI Insights.md](./17-AI%20Insights.md), Запис 13.
+
+Через кількість компонентів діаграму рівня 3 подано двома рисунками з однією таблицею компонентів: рис. 2.3 — наскрізний пайплайн обробки запиту, рис. 2.4 — модулі шарів Inbound, Core, Ports, Outbound.
+
+### 2.2.1. Пайплайн обробки запиту
+
+Запит REST проходить ланцюжок middleware у фіксованому порядку; кожен middleware або передає керування далі (`next()`), або завершує обробку помилкою, яку формує єдиний ErrorHandler у форматі RFC 9457 Problem Details. З'єднання Socket.io автентифікується на етапі handshake, а приєднання до кімнати курсу перевіряє той самий CourseRoleGuard (рис. 2.3).
+
+```mermaid
+flowchart TB
+    mobile["<b>Mobile App</b><br/>[Container]"]
+    proxy["<b>Reverse Proxy</b><br/>[Container: Caddy]"]
+
+    subgraph api["Backend API [Container: Node.js 22, Express 5, Socket.io]"]
+        root["<b>CompositionRoot</b><br/>[Component: app.js]<br/>Створення і зв'язування компонентів"]
+        subgraph http["HTTP-пайплайн (Express middleware)"]
+            ctx["<b>RequestContext</b><br/>[Middleware: AsyncLocalStorage]<br/>requestId"]
+            sec["<b>SecurityHeaders</b><br/>[Middleware: helmet]<br/>CORS вимкнено"]
+            rl["<b>RateLimiter</b><br/>[Middleware: express-rate-limit]<br/>userId / login: акаунт, IP"]
+            jwt["<b>JwtAuthMiddleware</b><br/>[Middleware: jsonwebtoken]<br/>підпис, alg, exp, iss"]
+            guard["<b>CourseRoleGuard</b><br/>[Middleware]<br/>requireCourseRole(...)"]
+            upload["<b>UploadMiddleware</b><br/>[Middleware: multer]<br/>PDF ≤ 10 МБ, MIME, %PDF"]
+            valid["<b>ValidationMiddleware</b><br/>[Middleware: zod]<br/>body, params, query → DTO"]
+            ctrl["<b>Controllers</b><br/>[Component: Express Router]<br/>див. рис. 2.4"]
+            err["<b>ErrorHandler</b><br/>[Middleware]<br/>RFC 9457 Problem Details"]
+            health["<b>HealthController</b><br/>[Component]<br/>GET /health"]
+        end
+        subgraph ws["WebSocket-канал (Socket.io)"]
+            wsAuth["<b>SocketAuthMiddleware</b><br/>[io.use: JwtAuthMiddleware]<br/>handshake"]
+            gw["<b>ProgressGateway</b><br/>[Component: Socket.io]<br/>кімнати курсів, події клієнта"]
+        end
+        logger["<b>Logger</b><br/>[Component: pino]<br/>JSON у stdout"]
+        core["<b>Core services</b><br/>[Components]<br/>див. рис. 2.4"]
+    end
+
+    mobile -- "REST/HTTPS (JSON)" --> proxy
+    mobile <-- "WSS (Socket.io)" --> proxy
+    proxy -- "HTTP/1.1" --> ctx
+    proxy -- "WebSocket Upgrade" --> wsAuth
+    ctx -- "next()" --> sec
+    ctx -- "GET /health" --> health
+    sec -- "next()" --> rl
+    rl -- "next() / 429" --> jwt
+    jwt -- "next() / 401" --> guard
+    guard -- "multipart: next()" --> upload
+    guard -- "next() / 403" --> valid
+    upload -- "next() / 413, 415" --> valid
+    valid -- "next() / 400" --> ctrl
+    ctrl -- "interface call" --> core
+    ctrl -- "next(err)" --> err
+    rl -. "next(err)" .-> err
+    jwt -. "next(err)" .-> err
+    guard -. "next(err)" .-> err
+    valid -. "next(err)" .-> err
+    wsAuth -- "connect / reject" --> gw
+    gw -- "join: перевірка ролі" --> guard
+    gw -- "interface call" --> core
+    core -. "Observer / EventEmitter" .-> gw
+    ctx -- "requestId" --> logger
+    err -- "log" --> logger
+    root -. "DI" .-> http
+    root -. "DI" .-> ws
+    root -. "DI" .-> core
+
+    classDef ext fill:#999999,stroke:#6b6b6b,color:#fff
+    classDef mw fill:#85bbf0,stroke:#5d82a8,color:#000
+    classDef comp fill:#438dd5,stroke:#2e6295,color:#fff
+    class mobile,proxy ext
+    class ctx,sec,rl,jwt,guard,upload,valid,err,wsAuth mw
+    class root,ctrl,health,gw,logger,core comp
+```
+
+Рисунок 2.3 – Діаграма компонентів Backend API: пайплайн обробки запиту (C4 Level 3)
+
+### 2.2.2. Модулі шарів
+
+Сервіси Core згруповано за модулями модульного моноліту: identity (AuthService), courses (CourseService, InvitationService, ContentAuditLog), testing (TestDeliveryService, AttemptService, QualityScorer, MockTestService), scheduling (SM2Scheduler, DailyPlanPrioritizer), generation (GenerationJobService, BudgetGuard, ModerationService), monitoring (MasteryService, AntiCheatEventService, ProgressPublisher), privacy (PrivacyService). Події прогресу, антисписування і завершення задач генерації доставляються за патерном Observer: сервіс викликає `emit` у ProgressPublisher (EventEmitter), ProgressGateway підписаний на події і транслює їх у кімнату курсу (рис. 2.4).
+
+```mermaid
+flowchart LR
+    subgraph inbound["Inbound — адаптери введення"]
+        direction TB
+        authC["<b>AuthController</b>"]
+        courseC["<b>CourseController</b><br/>курси, заходи, запрошення,<br/>матеріали, зразки"]
+        attemptC["<b>AttemptController</b><br/>видача тесту, відповідь"]
+        planC["<b>PlanController</b>"]
+        mockC["<b>MockTestController</b>"]
+        genC["<b>GenerationController</b>"]
+        modC["<b>ModerationController</b>"]
+        monC["<b>MonitoringController</b><br/>теплова карта, підтвердження"]
+        acC["<b>AntiCheatController</b>"]
+        privC["<b>PrivacyController</b>"]
+        gw["<b>ProgressGateway</b><br/>[Socket.io]"]
+        jobL["<b>JobEventsListener</b><br/>[BullMQ QueueEvents]"]
+    end
+
+    subgraph core["Core — сервіси і доменна логіка"]
+        direction TB
+        authS["<b>AuthService</b><br/>токени, ротація, reuse detection"]
+        courseS["<b>CourseService</b>"]
+        invS["<b>InvitationService</b>"]
+        delivS["<b>TestDeliveryService</b><br/>рандомізація, серверний таймер"]
+        attemptS["<b>AttemptService</b><br/>транзакція відповіді"]
+        scorer["<b>QualityScorer</b><br/>[pure] таблиця q"]
+        sm2["<b>SM2Scheduler</b><br/>[pure] EF, інтервал"]
+        prio["<b>DailyPlanPrioritizer</b><br/>P, ліміт 30"]
+        mockS["<b>MockTestService</b><br/>структура, пул, вибір питань"]
+        genS["<b>GenerationJobService</b>"]
+        budget["<b>BudgetGuard</b><br/>добовий ліміт"]
+        modS["<b>ModerationService</b>"]
+        mastS["<b>MasteryService</b>"]
+        acS["<b>AntiCheatEventService</b>"]
+        pub["<b>ProgressPublisher</b><br/>[EventEmitter]"]
+        audit["<b>ContentAuditLog</b>"]
+        privS["<b>PrivacyService</b>"]
+    end
+
+    subgraph ports["Ports — інтерфейси (Core)"]
+        direction TB
+        iUser["IUserRepository"]
+        iToken["IRefreshTokenRepository"]
+        iCourse["ICourseRepository"]
+        iAttempt["IAttemptRepository"]
+        iReview["IReviewStateRepository"]
+        iQRead["IQuestionReadRepository"]
+        iQWrite["IQuestionWriteRepository"]
+        iAc["IAntiCheatEventRepository"]
+        iAudit["IAuditLogRepository"]
+        iGenLog["IGenerationLogRepository"]
+        iTx["ITransactionManager"]
+        iFile["IFileStorage"]
+        iQueue["IJobQueue"]
+    end
+
+    subgraph outbound["Outbound — адаптери виведення"]
+        direction TB
+        pgRepo["<b>Pg*Repository, PgTransactionManager</b><br/>[pg]"]
+        fileS["<b>LocalFileStorage</b><br/>[fs, Docker volume]"]
+        mq["<b>BullMqJobQueue</b><br/>[BullMQ Queue]"]
+    end
+
+    db[("PostgreSQL 16")]
+    redis[("Redis 7")]
+    vol[("File Storage")]
+
+    authC --> authS
+    courseC --> courseS
+    courseC --> invS
+    attemptC --> delivS
+    attemptC --> attemptS
+    planC --> prio
+    mockC --> mockS
+    genC --> genS
+    modC --> modS
+    monC --> mastS
+    acC --> acS
+    gw --> acS
+    privC --> privS
+    jobL -- "Observer" --> pub
+    pub -. "Observer / EventEmitter" .-> gw
+
+    authS --> iUser
+    authS --> iToken
+    courseS --> iCourse
+    courseS --> iFile
+    courseS --> audit
+    invS --> iCourse
+    delivS --> iQRead
+    delivS --> iAttempt
+    attemptS --> iTx
+    attemptS --> iAttempt
+    attemptS --> iReview
+    attemptS --> scorer
+    attemptS --> sm2
+    attemptS -- "emit" --> pub
+    prio --> iReview
+    prio --> iCourse
+    mockS --> delivS
+    mockS --> iQRead
+    genS --> budget
+    genS -- "enqueue" --> iQueue
+    budget --> iGenLog
+    modS --> iQWrite
+    modS --> audit
+    mastS --> iAttempt
+    mastS --> iCourse
+    acS --> iAc
+    acS -- "emit" --> pub
+    audit --> iAudit
+    privS --> iUser
+    privS --> iAc
+
+    pgRepo -. "implements" .-> ports
+    fileS -. "implements IFileStorage" .-> iFile
+    mq -. "implements IJobQueue" .-> iQueue
+    pgRepo -- "SQL/TCP 5432" --> db
+    mq -- "enqueue (BullMQ)<br/>[RESP/TCP 6379]" --> redis
+    jobL -- "RESP/TCP 6379" --> redis
+    fileS -- "файлова система" --> vol
+
+    classDef comp fill:#438dd5,stroke:#2e6295,color:#fff
+    classDef pure fill:#2e7d32,stroke:#1b5e20,color:#fff
+    classDef port fill:#ffffff,stroke:#2e6295,color:#000,stroke-dasharray:4 3
+    classDef store fill:#999999,stroke:#6b6b6b,color:#fff
+    class authC,courseC,attemptC,planC,mockC,genC,modC,monC,acC,privC,gw,jobL,authS,courseS,invS,delivS,attemptS,prio,mockS,genS,budget,modS,mastS,acS,pub,audit,privS,pgRepo,fileS,mq comp
+    class scorer,sm2 pure
+    class iUser,iToken,iCourse,iAttempt,iReview,iQRead,iQWrite,iAc,iAudit,iGenLog,iTx,iFile,iQueue port
+    class db,redis,vol store
+```
+
+Рисунок 2.4 – Діаграма компонентів Backend API: модулі шарів (C4 Level 3)
+
+Таблиця 2.5 – Компоненти Backend API
+
+| Компонент | Шар | Відповідальність | Залежності | SRS-ID |
+|---|---|---|---|---|
+| CompositionRoot | Composition Root | Створення екземплярів і зв'язування компонентів через конструктори | усі компоненти (DI) | — |
+| RequestContext | Inbound (middleware) | Генерація requestId, збереження в AsyncLocalStorage | Logger | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
+| Logger | Inbound (наскрізний) | Структуровані журнали JSON у stdout з requestId | pino | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
+| SecurityHeaders | Inbound (middleware) | HTTP-заголовки безпеки; CORS вимкнено | helmet | [SRS-NFR-SEC-06](./srs.md#srs-nfr-sec-06) |
+| RateLimiter | Inbound (middleware) | Ліміти запитів на користувача і на вхід; 429 з Retry-After | express-rate-limit | [SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08) |
+| JwtAuthMiddleware | Inbound (middleware) | Перевірка access-токена: підпис, allowlist алгоритмів, exp, iss; 401 | jsonwebtoken | [SRS-FUN-02](./srs.md#srs-fun-02), [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01) |
+| SocketAuthMiddleware | Inbound (middleware) | Перевірка access-токена на handshake Socket.io (`io.use`) | JwtAuthMiddleware | [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05) |
+| CourseRoleGuard | Inbound (middleware) | Декларативна перевірка role_in_course для маршруту і приєднання до кімнати; 403 | ICourseRepository | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-06](./srs.md#srs-fun-06), [SRS-FUN-11](./srs.md#srs-fun-11), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05) |
+| UploadMiddleware | Inbound (middleware) | Приймання multipart: PDF ≤ 10 МБ, MIME application/pdf, сигнатура %PDF; 413, 415 | multer | [SRS-FUN-09](./srs.md#srs-fun-09), [SRS-FUN-10](./srs.md#srs-fun-10), [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07) |
+| ValidationMiddleware | Inbound (middleware) | Валідація body, params, query за схемою zod, формування DTO; 400 | zod | [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07) |
+| ErrorHandler | Inbound (middleware) | Відображення доменних помилок у HTTP-коди, формат RFC 9457, без stack trace | Logger | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
+| HealthController | Inbound | GET /health: 200 за доступності PostgreSQL і Redis | ITransactionManager, IJobQueue | [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
+| AuthController | Inbound | Реєстрація, вхід, оновлення токенів | AuthService | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-02](./srs.md#srs-fun-02) |
+| CourseController | Inbound | Курси, теми, контрольні заходи, коди запрошення, матеріали, зразки | CourseService, InvitationService | [SRS-FUN-04](./srs.md#srs-fun-04)…[SRS-FUN-10](./srs.md#srs-fun-10) |
+| AttemptController | Inbound | Видача тесту, фіксація відповіді | TestDeliveryService, AttemptService | [SRS-FUN-13](./srs.md#srs-fun-13)…[SRS-FUN-17](./srs.md#srs-fun-17) |
+| PlanController | Inbound | Персональний план на день | DailyPlanPrioritizer | [SRS-FUN-20](./srs.md#srs-fun-20), [SRS-FUN-21](./srs.md#srs-fun-21) |
+| MockTestController | Inbound | Публікація і проходження пробного тесту | MockTestService | [SRS-FUN-34](./srs.md#srs-fun-34)…[SRS-FUN-36](./srs.md#srs-fun-36) |
+| GenerationController | Inbound | Постановка задач генерації; 202 Accepted | GenerationJobService | [SRS-FUN-22](./srs.md#srs-fun-22), [SRS-FUN-23](./srs.md#srs-fun-23), [SRS-NFR-ASYNC-01](./srs.md#srs-nfr-async-01) |
+| ModerationController | Inbound | Схвалення, редагування, відхилення чернеток | ModerationService | [SRS-FUN-28](./srs.md#srs-fun-28) |
+| MonitoringController | Inbound | Теплова карта, підтвердження засвоєння | MasteryService | [SRS-FUN-46](./srs.md#srs-fun-46), [SRS-FUN-47](./srs.md#srs-fun-47) |
+| AntiCheatController | Inbound | Приймання буферизованих подій антисписування через REST | AntiCheatEventService | [SRS-FUN-37](./srs.md#srs-fun-37), [SRS-FUN-38](./srs.md#srs-fun-38), [SRS-FUN-41](./srs.md#srs-fun-41) |
+| PrivacyController | Inbound | Видалення облікового запису | PrivacyService | [SRS-FUN-48](./srs.md#srs-fun-48) |
+| ProgressGateway | Inbound | Кімнати курсів Socket.io; приймання подій клієнта; трансляція подій ProgressPublisher | AntiCheatEventService, ProgressPublisher (Observer), CourseRoleGuard | [SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-43](./srs.md#srs-fun-43), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-NFR-RT-01](./srs.md#srs-nfr-rt-01) |
+| JobEventsListener | Inbound | Підписка на BullMQ QueueEvents (completed, failed), передача в ProgressPublisher | ProgressPublisher, Redis | [SRS-FUN-30](./srs.md#srs-fun-30) |
+| AuthService | Core | Видача і ротація токенів, reuse detection, bcrypt | IUserRepository, IRefreshTokenRepository | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-02](./srs.md#srs-fun-02), [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01)…[SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03) |
+| CourseService | Core | Курси, теми, контрольні заходи, ролі, збереження PDF, обмеження co-instructor | ICourseRepository, IFileStorage, ContentAuditLog | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-06](./srs.md#srs-fun-06)…[SRS-FUN-10](./srs.md#srs-fun-10) |
+| InvitationService | Core | Створення, відкликання і застосування кодів запрошення | ICourseRepository | [SRS-FUN-04](./srs.md#srs-fun-04), [SRS-FUN-05](./srs.md#srs-fun-05) |
+| TestDeliveryService | Core | Рандомізація питань і варіантів, видача без ознаки правильної відповіді, серверний таймер, перевірка власника спроби | IQuestionReadRepository, IAttemptRepository | [SRS-FUN-13](./srs.md#srs-fun-13)…[SRS-FUN-15](./srs.md#srs-fun-15) |
+| AttemptService | Core | Транзакція «відповідь + ReviewState», ідемпотентність за (attemptId, questionId), публікація події прогресу | ITransactionManager, IAttemptRepository, IReviewStateRepository, QualityScorer, SM2Scheduler, ProgressPublisher | [SRS-FUN-16](./srs.md#srs-fun-16), [SRS-FUN-19](./srs.md#srs-fun-19), [SRS-FUN-43](./srs.md#srs-fun-43), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01), [SRS-NFR-PERF-02](./srs.md#srs-nfr-perf-02) |
+| QualityScorer | Core (чиста функція) | Обчислення q за таблицею 2.1 SRS | — | [SRS-FUN-17](./srs.md#srs-fun-17) |
+| SM2Scheduler | Core (чиста функція) | Перерахунок EF, інтервалу, кількості повторень, дати повторення | — | [SRS-FUN-19](./srs.md#srs-fun-19) |
+| DailyPlanPrioritizer | Core | Пріоритет P за найближчим контрольним заходом, ліміт 30 питань | IReviewStateRepository, ICourseRepository | [SRS-FUN-20](./srs.md#srs-fun-20), [SRS-FUN-21](./srs.md#srs-fun-21), [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01) |
+| MockTestService | Core | Структура пробного тесту за зразком, перевірка пулу 2 × структура, вибір питань за давністю | TestDeliveryService, IQuestionReadRepository, IAttemptRepository | [SRS-FUN-34](./srs.md#srs-fun-34)…[SRS-FUN-36](./srs.md#srs-fun-36) |
+| GenerationJobService | Core | Постановка задачі з типом контенту і jobId | BudgetGuard, IJobQueue | [SRS-FUN-22](./srs.md#srs-fun-22), [SRS-FUN-23](./srs.md#srs-fun-23), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02) |
+| BudgetGuard | Core | Перевірка добового ліміту вартості; 429 | IGenerationLogRepository | [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02) |
+| ModerationService | Core | Зміна статусу чернетки, доступ student лише до approved | IQuestionWriteRepository, ContentAuditLog | [SRS-FUN-28](./srs.md#srs-fun-28), [SRS-FUN-29](./srs.md#srs-fun-29) |
+| MasteryService | Core | Частка правильних відповідей «студент × тема», confirmed_by | IAttemptRepository, ICourseRepository | [SRS-FUN-46](./srs.md#srs-fun-46), [SRS-FUN-47](./srs.md#srs-fun-47) |
+| AntiCheatEventService | Core | Збереження подій виходу і знімків екрана, агрегати для моніторингу | IAntiCheatEventRepository, ProgressPublisher | [SRS-FUN-37](./srs.md#srs-fun-37)…[SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-41](./srs.md#srs-fun-41) |
+| ProgressPublisher | Core | Шина доменних подій (EventEmitter) для прогресу, антисписування і задач генерації | — | [SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-43](./srs.md#srs-fun-43) |
+| ContentAuditLog | Core | Журнал дій з контентом | IAuditLogRepository | [SRS-FUN-12](./srs.md#srs-fun-12) |
+| PrivacyService | Core | Видалення облікового запису зі знеособленням, видалення подій антисписування за строком | IUserRepository, IAntiCheatEventRepository | [SRS-FUN-48](./srs.md#srs-fun-48), [SRS-FUN-49](./srs.md#srs-fun-49) |
+| IUserRepository, IRefreshTokenRepository, ICourseRepository, IAttemptRepository, IReviewStateRepository, IQuestionReadRepository, IQuestionWriteRepository, IAntiCheatEventRepository, IAuditLogRepository, IGenerationLogRepository, ITransactionManager, IFileStorage, IJobQueue | Ports | Інтерфейси сховищ, транзакцій, файлів і черги; IQuestionReadRepository не повертає ознаку правильної відповіді (ISP) | — | [SRS-FUN-14](./srs.md#srs-fun-14), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
+| Pg*Repository, PgTransactionManager | Outbound | Реалізації репозиторіїв і транзакцій на pg; унікальне обмеження (attempt_id, question_id) | pg, PostgreSQL 16 | [SRS-FUN-16](./srs.md#srs-fun-16), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
+| LocalFileStorage | Outbound | Запис PDF у Docker volume | fs | [SRS-FUN-09](./srs.md#srs-fun-09), [SRS-FUN-10](./srs.md#srs-fun-10) |
+| BullMqJobQueue | Outbound | Постановка задач BullMQ з jobId, attempts = 3, exponential backoff 5 с, requestId у даних задачі | bullmq, Redis 7 | [SRS-NFR-ASYNC-03](./srs.md#srs-nfr-async-03), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
+
+Таблиця 2.6 – Типи зв'язків діаграм компонентів
+
+| Підпис зв'язку | Значення |
+|---|---|
+| DI | Впровадження залежності через конструктор у CompositionRoot |
+| interface call / суцільна стрілка без підпису | Синхронний виклик методу сервісу або інтерфейсу порту |
+| implements | Реалізація інтерфейсу порту адаптером Outbound |
+| Observer / EventEmitter, emit | Асинхронна доставка доменної події підписникам у межах процесу |
+| enqueue (BullMQ) | Постановка задачі в чергу Redis |
+| next() / next(err) | Передача керування наступному middleware або ErrorHandler |
+| SQL/TCP 5432, RESP/TCP 6379 | Мережеві виклики до PostgreSQL і Redis |
+
 ## 2.3. Документування архітектурних рішень (Architecture Decision Records)
 
 ## 2.4. Проєктування та моделювання баз даних

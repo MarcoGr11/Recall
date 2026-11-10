@@ -17,6 +17,7 @@
 > | 10 | ЛР4 | Висновки до Розділу 1 та консолідація |
 > | 11 | ЛР5 | SRS: аудит вимог за ISO/IEC/IEEE 29148 |
 > | 12 | ЛР5 | C4 Context і Container: архітектурне рев'ю |
+> | 13 | ЛР5 | C4 Component: аудит Clean Architecture |
 
 ## Запис 1 — Валідація першої теми Retain (15.09.2026)
 
@@ -1064,6 +1065,234 @@
 ### Фінальна версія
 
 [2_design.md](2_design.md), підрозділ 2.1 (рис. 2.1, 2.2, таблиці 2.1–2.4). Перевірка компіляції фінальних діаграм `npx -y @mermaid-js/mermaid-cli` — без помилок. Під час фіналізації діаграми переведено з синтаксису C4Context / C4Container на `flowchart TB` за інструкцією автора: синтаксис C4 компілюється, але при восьми і більше вузлах накладає підписи зв'язків і не підтримує пунктирного зв'язку для LTI 1.3; типи вузлів C4 збережено в підписах.
+
+## Запис 13 — C4 Component: аудит Clean Architecture (10.11.2026)
+
+**Інструмент:** Claude (Anthropic), сесія Claude Code в репозиторії проєкту. **Дата:** 10.11.2026.
+
+> **Розподіл ролей.** Автор визначив вимоги, обмеження проєкту та архітектурні рішення,
+> ухвалив рішення щодо кожного зауваження аудитора (прийняти / відхилити з обґрунтуванням)
+> і затвердив фінальну версію. Claude (Anthropic) за інструкціями автора сформував чернетку
+> артефакту, виконав аудит за промптом методички та вніс затверджені автором правки.
+
+### Внесок автора (крок [СТОП] 3.3)
+
+- Затвердив запропонований розподіл зауважень без змін: прийняв звернення контролерів лише до сервісів, інтерфейси репозиторіїв і черги (Dependency Inversion) з ручним DI, чисті функції SM2Scheduler і QualityScorer, Observer / EventEmitter для подій, компоненти JwtAuthMiddleware, CourseRoleGuard, ValidationMiddleware (zod), ErrorHandler, RateLimiter, Logger, AntiCheatEventService, MockTestService та інші; відхилив CQRS, Event Sourcing, Open Policy Agent, prom-client; переніс Strategy типів контенту в Generation Worker.
+- Затвердив поділ Level 3 на дві діаграми з однією таблицею компонентів.
+
+### Вхідні дані
+
+[srs.md](srs.md), [2_design.md](2_design.md) (підрозділ 2.1.2), `src/backend/package.json`.
+
+> [!quote]- Використаний промпт (розгорнути)
+> ```
+> Роль: Principal Software Architect, Tech Lead бекенд-розробки та експерт із
+> шаблонів проєктування (GoF, Clean Architecture, DDD).
+>
+> Контекст: Я студент 4 курсу спеціальності 121/F2 «Інженерія ПЗ». Я розробив третій
+> рівень моделі C4 (Component Diagram) для критичного сервісу свого проєкту. Мені
+> потрібен твій жорсткий інженерний аудит і рев'ю коду діаграми.
+>
+> Мій обраний критичний сервіс та його технології: Backend API на Node.js/Express
+> (Node.js 22, Express 5, Socket.io; PostgreSQL 16 через pg; постановка задач у
+> BullMQ на Redis 7; JWT).
+>
+> Мій код діаграми компонентів у Mermaid.js: [код — наведено в блоці «Перша версія
+> артефакту»]
+>
+> Твоє завдання:
+> 1. Перевірка на порушення шарів.
+> 2. Аналіз патернів та SOLID.
+> 3. Валідація повноти інженерного пайплайну (Global Error Handler, DTO Validation,
+>    логування, метрики).
+> 4. Аудит безпеки на рівні коду сервісу (JWT Guard, RBAC).
+>
+> Стиль: Сухий контрактний стиль.
+> ```
+
+> [!example]- Перша версія артефакту — Mermaid-код Level 3 (розгорнути)
+> ```mermaid
+> flowchart TB
+>     mobile["Mobile App"]
+>     subgraph api["Backend API"]
+>         subgraph inbound["Inbound"]
+>             authC["AuthController"]
+>             attemptC["AttemptController"]
+>             planC["PlanController"]
+>             genC["GenerationController"]
+>             gw["ProgressGateway (Socket.io)"]
+>         end
+>         subgraph core["Core"]
+>             authS["AuthService"]
+>             attemptS["AttemptService"]
+>             sm2["SM2Scheduler"]
+>             prio["DailyPlanPrioritizer"]
+>             genS["GenerationJobService"]
+>             pub["ProgressPublisher"]
+>         end
+>         subgraph outbound["Outbound"]
+>             userR["UserRepository"]
+>             attemptR["AttemptRepository"]
+>             reviewR["ReviewStateRepository"]
+>             questionR["QuestionRepository"]
+>             producer["JobQueueProducer (BullMQ)"]
+>         end
+>     end
+>     db[("PostgreSQL")]
+>     redis[("Redis")]
+>
+>     mobile --> authC
+>     mobile --> attemptC
+>     mobile --> planC
+>     mobile --> genC
+>     mobile <--> gw
+>     authC --> authS
+>     attemptC --> attemptS
+>     planC --> prio
+>     genC --> genS
+>     authS --> userR
+>     attemptS --> attemptR
+>     attemptS --> sm2
+>     attemptS --> pub
+>     attemptC --> attemptR
+>     sm2 --> reviewR
+>     prio --> reviewR
+>     prio --> questionR
+>     genS --> producer
+>     pub --> gw
+>     userR --> db
+>     attemptR --> db
+>     reviewR --> db
+>     questionR --> db
+>     producer --> redis
+> ```
+
+> [!abstract]- Повний звіт аудитора (розгорнути)
+> **ЗВІТ АУДИТУ C4 Level 3 (Component Diagram) — Backend API «Recall»**
+>
+> Об'єкт аудиту: діаграма компонентів контейнера Backend API (Node.js 22, Express 5, Socket.io), перша версія.
+> Базова лінія: docs/srs.md; діаграма контейнерів docs/2_design.md, підрозділ 2.1.2.
+> Критерії: Clean Architecture (R. C. Martin) — правило залежностей; SOLID; GoF; DDD (bounded contexts модульного моноліту); OWASP ASVS 5.0, розділи V4 (Access Control), V5 (Validation), V7 (Error Handling and Logging).
+> Позначення рівня: [BLOCKER] — порушення правила залежностей або вимоги безпеки SRS; [MAJOR] — відсутній компонент пайплайну, необхідний для SRS; [MINOR] — нотація.
+>
+> ---
+>
+> ### 1. Перевірка на порушення шарів
+>
+> **L-01 [BLOCKER] AttemptController → AttemptRepository.** Контролер шару Inbound звертається до репозиторію шару Outbound в обхід AttemptService. Порушено правило залежностей і SRP контролера; транзакційна межа «відповідь + ReviewState» (SRS-NFR-REL-01) стає неконтрольованою: запис може відбутися поза транзакцією сервісу. Рекомендація: контролери викликають лише сервіси.
+>
+> **L-02 [BLOCKER] Залежність Core → Outbound на конкретні класи.** AttemptService, SM2Scheduler, DailyPlanPrioritizer, AuthService залежать від конкретних репозиторіїв. Ядро залежить від деталей інфраструктури (pg, BullMQ) — порушення DIP і правила залежностей Clean Architecture. Рекомендація: інтерфейси (порти) у Core — `IAttemptRepository`, `IReviewStateRepository`, `IQuestionRepository`, `IUserRepository`, `IJobQueue`; реалізації в Outbound; зв'язування в Composition Root.
+>
+> **L-03 [MAJOR] SM2Scheduler → ReviewStateRepository.** Алгоритм SM-2 є чистою доменною функцією (вхід: ReviewState, q; вихід: новий ReviewState). Доступ до сховища всередині алгоритму змішує доменну логіку і I/O, ускладнює unit-тестування (SRS-NFR-MAINT-01). Рекомендація: SM2Scheduler без залежностей; читання і запис ReviewState виконує AttemptService у транзакції.
+>
+> **L-04 [MAJOR] ProgressPublisher → ProgressGateway.** Компонент Core залежить від компонента Inbound (Socket.io) — інверсія напряму залежностей. Рекомендація: ProgressPublisher публікує доменну подію через EventEmitter (Observer); ProgressGateway підписується на подію і транслює її в кімнату курсу.
+>
+> **L-05 [MAJOR] Відсутній Composition Root.** Не показано, де створюються і зв'язуються компоненти. Рекомендація: модуль `container` / `app.js`, що виконує Dependency Injection вручну (без DI-фреймворку) і є єдиним місцем знання про конкретні реалізації.
+>
+> **L-06 [MAJOR] Відсутня одиниця роботи (Unit of Work) / транзакційна межа.** SRS-NFR-REL-01 вимагає однієї ACID-транзакції для двох репозиторіїв; діаграма не визначає механізму передачі транзакції (спільний клієнт pg у межах `withTransaction`). Рекомендація: порт `ITransactionManager` у Core, реалізація в Outbound.
+>
+> ---
+>
+> ### 2. Аналіз патернів та SOLID
+>
+> **P-01 [MAJOR] SRP — AttemptService.** Сервіс поєднує видачу тесту, фіксацію відповіді, обчислення q, оркестрацію SM-2 і публікацію події. Рекомендація: QualityScorer (таблиця 2.1 SRS) — окремий чистий компонент; видача тесту — TestDeliveryService (рандомізація SRS-FUN-13, приховування правильних відповідей SRS-FUN-14, серверний таймер SRS-FUN-15).
+>
+> **P-02 [MAJOR] Відсутні компоненти для функціональних вимог SRS.** Не мають носія:
+> - SRS-FUN-04…SRS-FUN-06 — коди запрошення, обмеження co-instructor (CourseService, InvitationService);
+> - SRS-FUN-07…SRS-FUN-12 — курси, контрольні заходи, завантаження PDF, закриті зразки, журнал дій (CourseService, MaterialService, ContentAuditLog);
+> - SRS-FUN-28, SRS-FUN-29 — модерація (ModerationService);
+> - SRS-FUN-34…SRS-FUN-36 — пробний тест (MockTestService);
+> - SRS-FUN-37…SRS-FUN-41 — приймання подій антисписування (AntiCheatEventService);
+> - SRS-FUN-30 — ретрансляція подій задач (JobEventsListener на BullMQ QueueEvents);
+> - SRS-FUN-46, SRS-FUN-47 — теплова карта і підтвердження (MasteryService);
+> - SRS-FUN-48, SRS-FUN-49 — видалення даних (PrivacyService).
+>
+> **P-03 [MAJOR] OCP — типи контенту генерації.** GenerationJobService не визначає розширення для типів test, scenario, mock_test. Рекомендація: Strategy за типом контенту (валідація схеми, побудова промпту) — у Generation Worker; у Backend API — лише постановка задачі з типом.
+>
+> **P-04 [MINOR] ISP — репозиторії.** QuestionRepository обслуговує видачу тесту, пробний тест і модерацію. Рекомендація: розділити інтерфейси читання для студента (без правильних відповідей) і запису для модерації — це також конструктивно забезпечує SRS-FUN-14.
+>
+> **P-05 [MINOR] Патерни на зв'язках не підписано.** Рекомендація: підписи «DI», «interface call», «Observer / EventEmitter», «enqueue (BullMQ)», «SQL».
+>
+> **P-06 [MAJOR] DDD — межі модулів.** Компоненти не згруповано за bounded contexts модульного моноліту (identity, courses, testing, scheduling, generation, monitoring). Рекомендація: групування на діаграмі або колонка «Модуль» у таблиці; міжмодульні виклики — лише через публічні сервіси модуля.
+>
+> **P-07 [MAJOR] CQRS і окрема read-модель для дашборду.** Для Enterprise-рівня рекомендовано розділити команди і запити (CQRS) з окремою read-моделлю теплової карти, що оновлюється подіями.
+>
+> **P-08 [MAJOR] Event Sourcing для відповідей.** Рекомендовано зберігати відповіді як потік подій з відновленням ReviewState проєкцією.
+>
+> ---
+>
+> ### 3. Валідація повноти інженерного пайплайну
+>
+> **E-01 [BLOCKER] DTO Validation відсутня.** Немає компонента валідації вхідних даних на межі (тіло, параметри, query). OWASP ASVS V5; SRS-NFR-SEC-07 (обмеження файлу). Рекомендація: ValidationMiddleware на схемах zod для кожного маршруту; для завантаження — UploadMiddleware (multer, ліміт 10 МБ, MIME, сигнатура %PDF).
+>
+> **E-02 [BLOCKER] Global Error Handler відсутній.** Express 5 передає відхилені Promise в error-middleware, але без єдиного обробника клієнт отримує stack trace або різнотипні формати помилок. Рекомендація: ErrorHandler — єдиний формат (RFC 9457 Problem Details), відображення доменних помилок у коди 400 / 401 / 403 / 404 / 409 / 413 / 415 / 429, без розкриття внутрішніх деталей.
+>
+> **E-03 [MAJOR] Логування відсутнє.** SRS-NFR-OBS-01 вимагає JSON-журналів з requestId. Рекомендація: RequestContext (генерація requestId, AsyncLocalStorage) і Logger (pino); передача requestId у дані задачі BullMQ.
+>
+> **E-04 [MAJOR] Метрики відсутні.** Рекомендовано MetricsMiddleware (prom-client, гістограма тривалості запитів) з ендпоінтом /metrics для перевірки SRS-NFR-PERF-01 під час навантажувального тесту.
+>
+> **E-05 [MAJOR] Rate limiting відсутній.** SRS-NFR-SEC-08. Рекомендація: RateLimiter (express-rate-limit) з ключем userId для автентифікованих маршрутів і окремими лімітами для /auth/login (обліковий запис, IP).
+>
+> **E-06 [MAJOR] Healthcheck відсутній.** SRS-NFR-OBS-02: HealthController з перевіркою PostgreSQL і Redis.
+>
+> **E-07 [MAJOR] Ідемпотентність відповіді.** SRS-FUN-16: механізм не показано. Рекомендація: унікальне обмеження (attempt_id, question_id) у БД і обробка конфлікту в AttemptService.
+>
+> ---
+>
+> ### 4. Аудит безпеки на рівні коду сервісу
+>
+> **S-01 [BLOCKER] JWT Guard відсутній.** Немає компонента перевірки access-токена перед контролерами. Рекомендація: JwtAuthMiddleware (перевірка підпису, alg-allowlist, exp, issuer) для REST; аналогічна перевірка в handshake Socket.io (middleware `io.use`).
+>
+> **S-02 [BLOCKER] RBAC відсутній.** SRS-NFR-SEC-05, SRS-FUN-06, SRS-FUN-11, SRS-FUN-44: перевірка role_in_course не має компонента. Рекомендація: CourseRoleGuard — middleware з декларативною політикою маршруту (`requireCourseRole('owner')`, `requireCourseRole('owner','co-instructor')`), що читає Enrollment з репозиторію; та сама перевірка на `join` кімнати курсу в ProgressGateway.
+>
+> **S-03 [MAJOR] Ротація refresh-токенів.** SRS-NFR-SEC-02: AuthService не має сховища сімейств токенів. Рекомендація: RefreshTokenRepository (хеш токена, family_id, revoked_at) і логіка reuse detection в AuthService.
+>
+> **S-04 [MAJOR] Ліміт вартості LLM.** SRS-NFR-COST-02: постановка задачі не перевіряє добовий ліміт. Рекомендація: BudgetGuard у GenerationJobService із читанням агрегату generation_log.
+>
+> **S-05 [MAJOR] Захист від IDOR.** Перевірка ролі в курсі недостатня для ресурсів студента: студент того самого курсу не повинен отримувати спроби інших студентів. Рекомендація: перевірка власника ресурсу (ownership check) у сервісах для ролі student.
+>
+> **S-06 [MAJOR] Зовнішня авторизація політик.** Рекомендовано винести політики доступу в окремий Policy Decision Point (Open Policy Agent) для централізованого аудиту правил.
+>
+> **S-07 [MINOR] Заголовки безпеки.** Рекомендовано helmet для HTTP-заголовків (частина заголовків може встановлювати Caddy).
+>
+> **S-08 [MINOR] Обмеження CORS.** Мобільний клієнт не потребує CORS; middleware cors із довільним origin слід вимкнути або обмежити.
+>
+> ---
+>
+> **Підсумок.** 6 BLOCKER (L-01, L-02, E-01, E-02, S-01, S-02), 19 MAJOR, 4 MINOR. Діаграма у поточному вигляді описує лише щасливий шлях чотирьох сценаріїв (вхід, відповідь, план, постановка задачі генерації) і не трасується до більшості SRS-FUN (див. P-02).
+
+### Рішення щодо зауважень
+
+Відповідь автора на кроці [СТОП] 3.3: «Так, як запропоновано» — запропонований розподіл затверджено без змін.
+
+| Зауваження | Рішення автора | Обґрунтування |
+|---|---|---|
+| L-01: AttemptController → AttemptRepository | Прийнято | Контролери звертаються лише до сервісів Core |
+| L-02: Core залежить від конкретних репозиторіїв | Прийнято | Інтерфейси портів у Core, реалізації в Outbound (Dependency Inversion) |
+| L-03: SM2Scheduler звертається до сховища | Прийнято | SM2Scheduler і QualityScorer — чисті функції; I/O виконує AttemptService |
+| L-04: ProgressPublisher залежить від ProgressGateway | Прийнято | ProgressPublisher — EventEmitter (Observer), ProgressGateway — підписник |
+| L-05, L-06: Composition Root і транзакційна межа | Прийнято | CompositionRoot з ручним DI; порт ITransactionManager |
+| P-01: SRP AttemptService | Прийнято | Виділено QualityScorer і TestDeliveryService |
+| P-02: відсутні компоненти для SRS-FUN | Прийнято | CourseService, InvitationService, ModerationService, MockTestService, AntiCheatEventService, MasteryService, PrivacyService, ContentAuditLog, JobEventsListener |
+| P-04: ISP репозиторію питань | Прийнято | IQuestionReadRepository без ознаки правильної відповіді і IQuestionWriteRepository |
+| P-05: підписи патернів на зв'язках | Прийнято | DI, interface call, implements, Observer / EventEmitter, enqueue (BullMQ); таблиця 2.6 |
+| P-06: межі модулів | Прийнято | Сервіси Core згруповано за модулями модульного моноліту |
+| E-01: DTO Validation | Прийнято | ValidationMiddleware (zod), UploadMiddleware (multer) |
+| E-02: Global Error Handler | Прийнято | ErrorHandler у форматі RFC 9457 Problem Details |
+| E-03, E-05, E-06, E-07: логування, rate limiting, healthcheck, ідемпотентність | Прийнято | RequestContext і Logger (pino), RateLimiter, HealthController, унікальне обмеження (attempt_id, question_id) |
+| S-01, S-02: JWT Guard і RBAC | Прийнято | JwtAuthMiddleware і SocketAuthMiddleware; CourseRoleGuard для маршрутів і приєднання до кімнати |
+| S-03, S-04, S-05: refresh-токени, ліміт вартості, IDOR | Прийнято | IRefreshTokenRepository, BudgetGuard, перевірка власника спроби для ролі student |
+| S-07, S-08: заголовки безпеки, CORS | Прийнято | SecurityHeaders (helmet), CORS вимкнено |
+| P-03: Strategy типів контенту в Backend API | Відхилено (перенесено) | Strategy за типом контенту реалізується в Generation Worker; Backend API лише ставить задачу з типом, Worker не є предметом Level 3 |
+| P-07: CQRS з окремою read-моделлю | Відхилено | Теплову карту для групи до 100 студентів обчислює один агрегатний SQL-запит |
+| P-08: Event Sourcing для відповідей | Відхилено | ReviewState перераховується в одній транзакції з відповіддю; проєкції ускладнюють систему без вимоги SRS |
+| S-06: Open Policy Agent | Відхилено | Три ролі в курсі; декларативний CourseRoleGuard простіший і перевіряється інтеграційними тестами |
+| E-04: метрики prom-client, /metrics | Відхилено | p95 вимірює k6 з боку клієнта (VER-01); Prometheus відхилено в SRS (G-10) |
+| Розмір діаграми | Прийнято | Level 3 подано двома діаграмами (пайплайн запиту і модулі шарів) з однією таблицею компонентів |
+
+### Фінальна версія
+
+[2_design.md](2_design.md), підрозділ 2.2 (рис. 2.3, 2.4, таблиці 2.5, 2.6). Перевірка компіляції `npx -y @mermaid-js/mermaid-cli` — без помилок.
 
 ## Пов'язано
 
