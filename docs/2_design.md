@@ -142,7 +142,7 @@ flowchart TB
 | Mobile App | Reverse Proxy | REST/HTTPS (JSON), TCP 443 | Запити REST API |
 | Mobile App | Reverse Proxy | WSS (Socket.io), TCP 443 | Двонаправлений канал: події прогресу, антисписування, завершення генерації |
 | Reverse Proxy | Backend API | HTTP/1.1, WebSocket Upgrade, TCP 3000 | Проксування після термінації TLS |
-| Backend API | PostgreSQL 16 | SQL/TCP 5432 | Читання і запис доменних даних, транзакція «відповідь + ReviewState» |
+| Backend API | PostgreSQL 16 | SQL/TCP 5432 | Читання і запис доменних даних, транзакція «результати спроби + ReviewState» |
 | Backend API | Redis 7 | RESP/TCP 6379 | Постановка задач (enqueue BullMQ), підписка на QueueEvents |
 | Backend API | File Storage | Файлова система (volume) | Запис завантажених PDF |
 | Generation Worker | Redis 7 | RESP/TCP 6379 | Отримання задач, публікація стану задач (completed, failed) |
@@ -154,7 +154,7 @@ flowchart TB
 
 ## 2.2. Компонентне моделювання критичного сервісу системи
 
-Критичним сервісом обрано контейнер Backend API: він реалізує більшість функціональних вимог, транзакцію «відповідь + ReviewState» ([SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01)), контроль доступу ([SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05)) і доставку подій у реальному часі ([SRS-NFR-RT-01](./srs.md#srs-nfr-rt-01)). Компоненти організовано за Clean Architecture з чотирма шарами:
+Критичним сервісом обрано контейнер Backend API: він реалізує більшість функціональних вимог, транзакцію «результати спроби + ReviewState» при завершенні спроби ([SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01)), контроль доступу ([SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05)) і доставку подій у реальному часі ([SRS-NFR-RT-01](./srs.md#srs-nfr-rt-01)). Компоненти організовано за Clean Architecture з чотирма шарами:
 - **Inbound** — адаптери введення: контролери Express, шлюз Socket.io, слухач подій черги;
 - **Core** — сервіси застосунку і доменна логіка; не залежить від Express, pg і BullMQ;
 - **Ports** — інтерфейси сховищ і черги, визначені в Core (Dependency Inversion);
@@ -262,9 +262,9 @@ flowchart LR
         courseS["<b>CourseService</b>"]
         invS["<b>InvitationService</b>"]
         delivS["<b>TestDeliveryService</b><br/>рандомізація, серверний таймер"]
-        attemptS["<b>AttemptService</b><br/>транзакція відповіді"]
-        scorer["<b>QualityScorer</b><br/>[pure] таблиця q"]
-        sm2["<b>SM2Scheduler</b><br/>[pure] EF, інтервал"]
+        attemptS["<b>AttemptService</b><br/>відповідь; завершення спроби"]
+        scorer["<b>QualityScorer</b><br/>[pure] q за часткою правильних"]
+        sm2["<b>SM2Scheduler</b><br/>[pure] EF, інтервал на спробу"]
         prio["<b>DailyPlanPrioritizer</b><br/>P, ліміт 30"]
         mockS["<b>MockTestService</b><br/>структура, пул, вибір питань"]
         genS["<b>GenerationJobService</b>"]
@@ -404,9 +404,9 @@ flowchart LR
 | CourseService | Core | Курси, теми, контрольні заходи, ролі, збереження PDF, обмеження co-instructor | ICourseRepository, IFileStorage, ContentAuditLog | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-06](./srs.md#srs-fun-06)…[SRS-FUN-10](./srs.md#srs-fun-10) |
 | InvitationService | Core | Створення, відкликання і застосування кодів запрошення | ICourseRepository | [SRS-FUN-04](./srs.md#srs-fun-04), [SRS-FUN-05](./srs.md#srs-fun-05) |
 | TestDeliveryService | Core | Рандомізація питань і варіантів, видача без ознаки правильної відповіді, серверний таймер, перевірка власника спроби | IQuestionReadRepository, IAttemptRepository | [SRS-FUN-13](./srs.md#srs-fun-13)…[SRS-FUN-15](./srs.md#srs-fun-15) |
-| AttemptService | Core | Транзакція «відповідь + ReviewState», ідемпотентність за (attemptId, questionId), публікація події прогресу | ITransactionManager, IAttemptRepository, IReviewStateRepository, QualityScorer, SM2Scheduler, ProgressPublisher | [SRS-FUN-16](./srs.md#srs-fun-16), [SRS-FUN-19](./srs.md#srs-fun-19), [SRS-FUN-43](./srs.md#srs-fun-43), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01), [SRS-NFR-PERF-02](./srs.md#srs-nfr-perf-02) |
-| QualityScorer | Core (чиста функція) | Обчислення q за таблицею 2.1 SRS | — | [SRS-FUN-17](./srs.md#srs-fun-17) |
-| SM2Scheduler | Core (чиста функція) | Перерахунок EF, інтервалу, кількості повторень, дати повторення | — | [SRS-FUN-19](./srs.md#srs-fun-19) |
+| AttemptService | Core | Фіксація відповіді з ідемпотентністю за (attemptId, questionId) і публікацією події прогресу; при завершенні спроби — транзакція «результати спроби + ReviewState» (один перерахунок на тему) | ITransactionManager, IAttemptRepository, IReviewStateRepository, QualityScorer, SM2Scheduler, ProgressPublisher | [SRS-FUN-16](./srs.md#srs-fun-16), [SRS-FUN-19](./srs.md#srs-fun-19), [SRS-FUN-43](./srs.md#srs-fun-43), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01), [SRS-NFR-PERF-02](./srs.md#srs-nfr-perf-02) |
+| QualityScorer | Core (чиста функція) | Обчислення q для теми за часткою правильних відповідей (таблиця 2.1 SRS) | — | [SRS-FUN-17](./srs.md#srs-fun-17) |
+| SM2Scheduler | Core (чиста функція) | Один перерахунок EF, інтервалу, кількості повторень, дати повторення на тему при завершенні спроби; EF не змінюється при q < 3 | — | [SRS-FUN-19](./srs.md#srs-fun-19) |
 | DailyPlanPrioritizer | Core | Пріоритет P за найближчим контрольним заходом, ліміт 30 питань | IReviewStateRepository, ICourseRepository | [SRS-FUN-20](./srs.md#srs-fun-20), [SRS-FUN-21](./srs.md#srs-fun-21), [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01) |
 | MockTestService | Core | Структура пробного тесту за зразком, перевірка пулу 2 × структура, вибір питань за давністю | TestDeliveryService, IQuestionReadRepository, IAttemptRepository | [SRS-FUN-34](./srs.md#srs-fun-34)…[SRS-FUN-36](./srs.md#srs-fun-36) |
 | GenerationJobService | Core | Постановка задачі з типом контенту і jobId | BudgetGuard, IJobQueue | [SRS-FUN-22](./srs.md#srs-fun-22), [SRS-FUN-23](./srs.md#srs-fun-23), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02) |
