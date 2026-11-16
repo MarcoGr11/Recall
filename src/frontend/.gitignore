@@ -39,3 +39,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Skia web runtime (copied by postinstall) and local screenshots
+public/canvaskit.wasm
+docs-screens/
