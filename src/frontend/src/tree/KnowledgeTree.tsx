@@ -1,8 +1,9 @@
-import { Canvas, Circle, Group, Picture, Rect, Skia, type SkPicture, type Transforms3d } from '@shopify/react-native-skia';
+import { BackdropBlur, Canvas, Circle, Fill, Group, LinearGradient, Picture, Rect, Skia, rect, vec, type SkPicture, type Transforms3d } from '@shopify/react-native-skia';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccessibilityInfo, PanResponder, Platform, Pressable, StyleSheet, View, type GestureResponderEvent } from 'react-native';
 import Animated, { type FrameInfo, runOnJS, useAnimatedStyle, useDerivedValue, useFrameCallback, useSharedValue } from 'react-native-reanimated';
 
+import { BAR_ALPHA, BAR_BLUR, SCRIM_BOTTOM, SCRIM_LEAD, SCRIM_TOP, withAlpha } from '../app/barMetrics';
 import { Ground, PALETTE, Sky, type TimeOfDay } from './Background';
 import { createPaints, createResources, drawParticles, drawTree } from './draw';
 import { GROUND_Y, WORLD_H, WORLD_W, generateTree, structureKey } from './generate';
@@ -24,7 +25,7 @@ export function useReduceMotion(): boolean {
 }
 
 /** CanvasKit objects are not garbage collected: on web keep the last two pictures and free older ones. */
-function recycle(bin: SkPicture[], picture: SkPicture) {
+export function recycle(bin: SkPicture[], picture: SkPicture) {
   'worklet';
   bin.push(picture);
   if (bin.length > 2) bin.shift()?.dispose();
@@ -75,9 +76,11 @@ export interface KnowledgeTreeProps {
   onPressNothing?: () => void;
   /** Dev only: UI-thread frames rendered during the last second. */
   onFps?: (fps: number) => void;
+  /** A translucent tab bar lies over the bottom of the scene: blur that strip and tint it with the surface colour. */
+  bar?: { height: number; surface: string };
 }
 
-export function KnowledgeTree({ input, nowMs, time, selectedTopicId, labels, onPressTopic, onPressCourse, onPressNothing, onFps }: KnowledgeTreeProps) {
+export function KnowledgeTree({ input, nowMs, time, selectedTopicId, labels, onPressTopic, onPressCourse, onPressNothing, onFps, bar }: KnowledgeTreeProps) {
   const reduceMotion = useReduceMotion();
   const [box, setBox] = useState({ w: 0, h: 0 });
   const root = useRef<View>(null);
@@ -294,6 +297,22 @@ export function KnowledgeTree({ input, nowMs, time, selectedTopicId, labels, onP
             </Group>
             <Rect x={0} y={0} width={w} height={h} color={PALETTE[time].veil} />
             <Picture picture={air} />
+            {bar && (
+              <>
+                <BackdropBlur blur={BAR_BLUR} clip={rect(0, h - bar.height, w, bar.height)}>
+                  <Fill color={bar.surface} opacity={BAR_ALPHA} />
+                </BackdropBlur>
+                {/* underlay that keeps icons and labels readable over any scene, see barContrast() */}
+                <Rect x={0} y={h - bar.height - SCRIM_LEAD} width={w} height={bar.height + SCRIM_LEAD}>
+                  <LinearGradient
+                    start={vec(0, h - bar.height - SCRIM_LEAD)}
+                    end={vec(0, h)}
+                    colors={[withAlpha(bar.surface, 0), withAlpha(bar.surface, SCRIM_TOP), withAlpha(bar.surface, SCRIM_BOTTOM)]}
+                    positions={[0, SCRIM_LEAD / (bar.height + SCRIM_LEAD), 1]}
+                  />
+                </Rect>
+              </>
+            )}
           </Canvas>
           <Animated.View style={[styles.world, overlayStyle]}>
             <LeafButtons leaves={prims.leaves} labels={labels} onPress={onPressTopic} />

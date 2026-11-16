@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
 
+import { useTheme } from '../theme';
 import { TIMES, timeOfDayAt, type TimeOfDay } from './Background';
 import { DevPanel, type DevAction } from './DevPanel';
 import { KnowledgeTree } from './KnowledgeTree';
@@ -22,7 +23,9 @@ const mapTopic = (input: TreeInput, topicId: string, change: (t: Topic) => Topic
   courses: input.courses.map((c) => (c.topics.some((t) => t.id === topicId) ? { ...c, topics: c.topics.map((t) => (t.id === topicId ? change(t) : t)) } : c)),
 });
 
-export default function KnowledgeTreeScreen() {
+/** `bottomInset` is the height of the translucent tab bar that floats over the bottom of the scene. */
+export default function KnowledgeTreeScreen({ bottomInset = 0 }: { bottomInset?: number }) {
+  const theme = useTheme();
   const [today] = useState(Date.now);
   const [input, setInput] = useState(() => mockTree(today));
   const [days, setDays] = useState(0);
@@ -124,7 +127,7 @@ export default function KnowledgeTreeScreen() {
   return (
     <View style={styles.screen}>
       {asList ? (
-        <View style={[styles.fill, { paddingTop: TOP_INSET + 44 }]}>
+        <View style={[styles.fill, { paddingTop: TOP_INSET + 44, paddingBottom: bottomInset, backgroundColor: theme.background }]}>
           <TopicList input={input} nowMs={nowMs} onPressTopic={(topicId) => setSelection({ topicId })} />
         </View>
       ) : (
@@ -138,6 +141,7 @@ export default function KnowledgeTreeScreen() {
           onPressCourse={(courseId) => setSelection({ courseId })}
           onPressNothing={() => setSelection(null)}
           onFps={__DEV__ ? setFps : undefined}
+          bar={bottomInset ? { height: bottomInset, surface: theme.surface } : undefined}
         />
       )}
 
@@ -152,7 +156,7 @@ export default function KnowledgeTreeScreen() {
         </Pressable>
       </View>
 
-      <View style={styles.bottom}>
+      <View style={[styles.bottom, { bottom: bottomInset }]}>
         {(topic || course) && (
           <View style={styles.card} accessibilityLiveRegion="polite">
             <View style={styles.cardText}>
@@ -196,7 +200,7 @@ export default function KnowledgeTreeScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#0E1931' },
-  fill: { flex: 1, backgroundColor: '#F4F7F2' },
+  fill: { flex: 1 },
   top: { position: 'absolute', right: 12, pointerEvents: 'box-none' },
   toggle: { backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: 18, paddingVertical: 8, paddingHorizontal: 16, minHeight: 36, justifyContent: 'center' },
   toggleText: { fontSize: 15, fontWeight: '600', color: '#1F3A26' },
