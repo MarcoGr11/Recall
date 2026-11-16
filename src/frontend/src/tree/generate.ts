@@ -1,4 +1,4 @@
-import type { Branch, Course, Leaf, Limb, LimbSample, TreeInput, TreePrimitives } from './types';
+import type { Branch, Course, Fork, Leaf, Limb, LimbSample, TreeInput, TreePrimitives } from './types';
 
 export const WORLD_W = 1000;
 export const WORLD_H = 1400;
@@ -44,8 +44,9 @@ const dir = (a: number) => ({ x: Math.sin(a), y: -Math.cos(a) });
 /**
  * Closed polygon [x0,y0,x1,y1,...] around the first `visible` units of a limb.
  * The tip always tapers to a point, so trimming `visible` 0→length "grows" the limb.
+ * `widthScale` thins the whole limb (a young trunk is slimmer).
  */
-export function outline(samples: LimbSample[], visible: number): number[] {
+export function outline(samples: LimbSample[], visible: number, widthScale = 1): number[] {
   'worklet';
   const n = samples.length;
   if (n < 2 || visible <= 0) return [];
@@ -72,7 +73,7 @@ export function outline(samples: LimbSample[], visible: number): number[] {
     const tl = Math.sqrt(tx * tx + ty * ty) || 1;
     tx /= tl;
     ty /= tl;
-    const hw = 0.5 * pw * Math.min(1, (visible - pd) / TIP_TAPER);
+    const hw = 0.5 * pw * widthScale * Math.min(1, (visible - pd) / TIP_TAPER);
     left.push(px - ty * hw, py + tx * hw);
     right.push(px + ty * hw, py - tx * hw);
     if (last) break;
@@ -251,7 +252,7 @@ function makeLeaf(course: Course, topicId: string, station: number, segments: Se
   const twigAngle = bezierTangent(seg, t) + sideSign * (40 + 35 * r()) * DEG;
   const twigLen = ((i % 4 < 2 ? 46 : 24) + 22 * r()) * (overflow ? 1.7 : 1);
   const rotation = twigAngle + (r() - 0.5) * 0.9;
-  const size = 34 + 10 * r();
+  const size = 46 + 14 * r();
   const twig = dir(twigAngle);
   const axis = dir(rotation);
 
@@ -292,9 +293,29 @@ function makeBranch(seed: string, course: Course, slot: number): { branch: Branc
   // width depends on the distance from the base only → stable when the branch gets longer
   const body = limb(course.id, pts, (d) => 3 + w0 * Math.pow(Math.max(0, 1 - d / 480), 1.1));
 
+  // one decorative fork per segment, so the branch reads as a branch and not as a spike
+  let path = body.path;
+  const forks: Fork[] = segments.map((seg, j) => {
+    const r = rngFor(`${course.id}/fork${j}`);
+    const k = 7;
+    const from = body.samples[j * SAMPLES_PER_SEGMENT + k];
+    const angle = bezierTangent(seg, k / SAMPLES_PER_SEGMENT) + (j % 2 === 0 ? 1 : -1) * (30 + 16 * r()) * DEG;
+    const len = 52 + 34 * r();
+    const bend = (r() - 0.5) * 0.5;
+    const fpts = [];
+    for (let i = 0; i <= 6; i++) {
+      const d = dir(angle + (bend * i) / 6);
+      const prev: { x: number; y: number } = i === 0 ? from : fpts[i - 1];
+      fpts.push(i === 0 ? { x: from.x, y: from.y } : { x: prev.x + (d.x * len) / 6, y: prev.y + (d.y * len) / 6 });
+    }
+    const fork = limb('fork', fpts, (d) => 1.5 + from.w * 0.6 * Math.max(0, 1 - d / len));
+    path += fork.path;
+    return { at: from.d, samples: fork.samples, length: fork.length };
+  });
+
   const leaves: Leaf[] = [];
   course.topics.forEach((topic, i) => leaves.push(makeLeaf(course, topic.id, stations[i], segments, leaves)));
-  return { branch: { ...body, courseId: course.id, slot }, leaves };
+  return { branch: { ...body, path, courseId: course.id, slot, forks }, leaves };
 }
 
 /** Pure, deterministic: the same input always gives the same primitives. Mastery is not used. */

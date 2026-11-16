@@ -12,12 +12,15 @@ import {
 
 import { outline } from './generate';
 import { masteryColor } from './mastery';
-import { DUR, progress, shownMastery, visibleLength, type LeafState, type Scene } from './scene';
+import { DUR, progress, shownMastery, trunkLength, visibleLength, type LeafState, type Scene } from './scene';
 import type { TreePrimitives } from './types';
 
 export interface Resources {
   groundY: number;
   leaf: SkPath;
+  /** Shaded lower half and the veins of the unit leaf. */
+  half: SkPath;
+  veins: SkPath;
   bark: SkPaint;
   grain: SkPaint;
   edge: SkPaint;
@@ -26,8 +29,8 @@ export interface Resources {
   vein: SkPaint;
   twig: SkPaint;
   glow: SkPaint;
+  canopy: SkPaint;
   dot: SkPaint;
-  trunk: SkPath;
   roots: SkPath[];
   /** Cached outlines of fully grown branches, keyed by course id. */
   full: Record<string, { path: SkPath; length: number }>;
@@ -88,13 +91,13 @@ export function createPaints() {
   const vein = Skia.Paint();
   vein.setAntiAlias(true);
   vein.setStyle(PaintStyle.Stroke);
-  vein.setStrokeWidth(0.035);
+  vein.setStrokeWidth(0.028);
   vein.setStrokeCap(StrokeCap.Round);
 
   const twig = Skia.Paint();
   twig.setAntiAlias(true);
   twig.setStyle(PaintStyle.Stroke);
-  twig.setStrokeWidth(3.2);
+  twig.setStrokeWidth(2.4);
   twig.setStrokeCap(StrokeCap.Round);
   twig.setColor(rgba(0.36, 0.24, 0.15));
 
@@ -102,10 +105,14 @@ export function createPaints() {
   glow.setAntiAlias(true);
   glow.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, 9, true));
 
+  const canopy = Skia.Paint();
+  canopy.setAntiAlias(true);
+  canopy.setMaskFilter(Skia.MaskFilter.MakeBlur(BlurStyle.Normal, 22, true));
+
   const dot = Skia.Paint();
   dot.setAntiAlias(true);
 
-  return { bark, grain, edge, shade, fill, vein, twig, glow, dot };
+  return { bark, grain, edge, shade, fill, vein, twig, glow, canopy, dot };
 }
 
 export function createResources(prims: TreePrimitives, paints: ReturnType<typeof createPaints>): Resources {
@@ -115,8 +122,9 @@ export function createResources(prims: TreePrimitives, paints: ReturnType<typeof
     ...paints,
     groundY: prims.groundY,
     // unit leaf: base at (0,0), tip at (1,0)
-    leaf: svg('M0 0C0.16 -0.34 0.62 -0.36 1 0C0.64 0.3 0.2 0.32 0 0Z'),
-    trunk: svg(prims.trunk.path),
+    leaf: svg('M0 0C0.1 -0.2 0.3 -0.36 0.55 -0.3C0.78 -0.24 0.92 -0.1 1 0C0.92 0.1 0.78 0.24 0.55 0.3C0.3 0.36 0.1 0.2 0 0Z'),
+    half: svg('M0 0L1 0C0.92 0.1 0.78 0.24 0.55 0.3C0.3 0.36 0.1 0.2 0 0Z'),
+    veins: svg('M0.04 0L0.95 0M0.24 0L0.4 -0.2M0.24 0L0.4 0.2M0.45 0L0.6 -0.19M0.45 0L0.6 0.19M0.66 0L0.78 -0.13M0.66 0L0.78 0.13'),
     roots: prims.roots.map((r) => svg(r.path)),
     full,
   };
@@ -153,8 +161,10 @@ function drawLeafShape(
   canvas.scale(size, size);
   r.fill.setColor(Float32Array.of(c[0], c[1], c[2], alpha));
   canvas.drawPath(r.leaf, r.fill);
-  r.vein.setColor(Float32Array.of(c[0] * 0.5, c[1] * 0.5, c[2] * 0.45, alpha * 0.8));
-  canvas.drawLine(0.06, 0, 0.92, 0, r.vein);
+  r.fill.setColor(Float32Array.of(c[0] * 0.62, c[1] * 0.68, c[2] * 0.5, alpha * 0.5));
+  canvas.drawPath(r.half, r.fill);
+  r.vein.setColor(Float32Array.of(c[0] * 0.42, c[1] * 0.45, c[2] * 0.36, alpha * 0.75));
+  canvas.drawPath(r.veins, r.vein);
   canvas.restore();
 }
 
@@ -194,9 +204,37 @@ function drawLeaf(canvas: SkCanvas, r: Resources, l: LeafState, t: number, scene
 export function drawTree(canvas: SkCanvas, scene: Scene, r: Resources, t: number) {
   'worklet';
   const instant = scene.instant;
-  for (let i = 0; i < r.roots.length; i++) drawLimb(canvas, r.roots[i], r);
-  drawLimb(canvas, r.trunk, r);
-  canvas.drawPath(r.trunk, r.shade);
+  const tall = trunkLength(scene, t);
+  const samples = scene.trunk.samples;
+  const full = samples.length ? samples[samples.length - 1].d : 1;
+  // a young tree has a slimmer trunk
+  const young = 0.4 + 0.6 * Math.min(1, tall / full);
+  if (samples.length) {
+    // roots shrink towards the trunk base together with it
+    canvas.save();
+    canvas.translate(samples[0].x * (1 - young), r.groundY * (1 - young));
+    canvas.scale(young, young);
+    for (let i = 0; i < r.roots.length; i++) drawLimb(canvas, r.roots[i], r);
+    canvas.restore();
+  }
+  const flatTrunk = outline(samples, tall, young);
+  const trunkPts = [];
+  for (let k = 0; k < flatTrunk.length; k += 2) trunkPts.push({ x: flatTrunk[k], y: flatTrunk[k + 1] });
+  if (trunkPts.length > 0) {
+    const trunk = Skia.Path.Polygon(trunkPts, true);
+    drawLimb(canvas, trunk, r);
+    canvas.drawPath(trunk, r.shade);
+    trunk.dispose();
+  }
+  let alive = 0;
+  for (let i = 0; i < scene.branches.length; i++) if (!scene.branches[i].died) alive++;
+  if (alive === 0 && trunkPts.length > 0) {
+    // sapling: two fresh leaves on the tip (the tip is the middle vertex of the outline)
+    const tip = trunkPts[trunkPts.length >> 1];
+    const wave = instant ? 0 : Math.sin(t * 0.002) * 0.08;
+    drawLeafShape(canvas, r, tip.x, tip.y + 6, -0.95 + wave, 52, 1, 1);
+    drawLeafShape(canvas, r, tip.x, tip.y + 6, 0.8 + wave, 46, 0.92, 1);
+  }
 
   for (let i = 0; i < scene.branches.length; i++) {
     const b = scene.branches[i];
@@ -204,6 +242,20 @@ export function drawTree(canvas: SkCanvas, scene: Scene, r: Resources, t: number
     const sway = instant ? 0 : Math.sin(t * 0.0011 + b.phase) * 0.9 + Math.sin(t * 0.0024 + b.phase * 2.3) * 0.4;
     canvas.save();
     canvas.rotate(sway, b.samples[0].x, b.samples[0].y);
+
+    // soft canopy clumps behind the branch, tinted by the average mastery of its leaves
+    if (b.lush > 0 && !b.died) {
+      const c = masteryColor(b.tone);
+      const n = b.samples.length - 1;
+      for (let k = 0; k < 4; k++) {
+        const s = b.samples[Math.round(n * (0.34 + 0.22 * k))];
+        if (s.d > visible) break;
+        const breathe = instant ? 1 : 1 + 0.025 * Math.sin(t * 0.0016 + b.phase + k * 1.9);
+        const rad = (74 + 20 * (k % 2)) * b.lush * breathe;
+        r.canopy.setColor(Float32Array.of(c[0] * 0.6, c[1] * 0.8, c[2] * 0.5, 0.3));
+        canvas.drawCircle(s.x, s.y - 20, rad, r.canopy);
+      }
+    }
     for (let k = 0; k < b.leaves.length; k++) drawLeaf(canvas, r, b.leaves[k], t, scene, true);
 
     const cached = r.full[b.id];
@@ -217,6 +269,17 @@ export function drawTree(canvas: SkCanvas, scene: Scene, r: Resources, t: number
       const path = Skia.Path.Polygon(pts, true);
       drawLimb(canvas, path, r);
       path.dispose();
+      for (let f = 0; f < b.forks.length; f++) {
+        const fork = b.forks[f];
+        const reach = Math.min(fork.length, visible - fork.at);
+        if (reach <= 0) continue;
+        const ff = outline(fork.samples, reach);
+        const fp = [];
+        for (let k = 0; k < ff.length; k += 2) fp.push({ x: ff[k], y: ff[k + 1] });
+        const forkPath = Skia.Path.Polygon(fp, true);
+        drawLimb(canvas, forkPath, r);
+        forkPath.dispose();
+      }
     }
 
     for (let k = 0; k < b.leaves.length; k++) drawLeaf(canvas, r, b.leaves[k], t, scene, false);

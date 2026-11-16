@@ -111,7 +111,7 @@ export function KnowledgeTree({ input, nowMs, time, selectedTopicId, labels, onP
   useEffect(() => frame.setActive(!reduceMotion), [frame, reduceMotion]);
 
   const last = useRef<Scene | null>(null);
-  const scene = useSharedValue<Scene>({ instant: true, branches: [] });
+  const scene = useSharedValue<Scene>({ instant: true, trunk: { samples: [], from: 0, to: 0, born: 0 }, branches: [] });
   useEffect(() => {
     last.current = buildScene(last.current, prims, input, nowMs, clock.value, reduceMotion);
     scene.value = last.current;
@@ -121,8 +121,19 @@ export function KnowledgeTree({ input, nowMs, time, selectedTopicId, labels, onP
   const { w, h } = box;
   // the ground line sits at 86 % of the height, the rest below it is ground and grass
   const horizon = h * 0.86;
-  const fit = Math.min(w / WORLD_W, horizon / GROUND_Y) || 1;
-  const bx = (w - WORLD_W * fit) / 2;
+  // Frame the tree, not the whole world: a small tree fills the screen too. The frame is quantised
+  // (steps of 200 units) so it only changes when the tree outgrows it, not on every new leaf.
+  const framing = useMemo(() => {
+    let half = 0;
+    let top = GROUND_Y - 760;
+    for (const l of prims.leaves) {
+      half = Math.max(half, Math.abs(l.x - WORLD_W / 2) + l.size);
+      top = Math.min(top, l.y - l.size);
+    }
+    return { width: Math.max(600, Math.ceil((half * 2 + 60) / 200) * 200), top: Math.max(0, Math.floor((top - 30) / 200) * 200) };
+  }, [prims]);
+  const fit = Math.min(w / framing.width, (horizon * 0.94) / (GROUND_Y - framing.top)) || 1;
+  const bx = w / 2 - (WORLD_W / 2) * fit;
   const by = horizon - GROUND_Y * fit;
 
   const tx = useSharedValue(0);
@@ -136,6 +147,9 @@ export function KnowledgeTree({ input, nowMs, time, selectedTopicId, labels, onP
   const far = useDerivedValue<Transforms3d>(() => [{ translateX: tx.value * 0.12 }, { translateY: ty.value * 0.12 }], []);
   const mid = useDerivedValue<Transforms3d>(() => [{ translateX: tx.value * 0.28 }, { translateY: ty.value * 0.28 }], []);
   const near = useDerivedValue<Transforms3d>(() => [{ translateX: tx.value * 0.5 }, { translateY: ty.value * 0.5 }], []);
+  const period = w + 520;
+  const driftFar = useDerivedValue<Transforms3d>(() => [{ translateX: ((clock.value * 0.004) % period) + tx.value * 0.05 }], [period]);
+  const driftNear = useDerivedValue<Transforms3d>(() => [{ translateX: ((clock.value * 0.009 + period * 0.4) % period) + tx.value * 0.08 }], [period]);
   const overlayStyle = useAnimatedStyle(() => ({
     transform: [
       { translateX: w / 2 + tx.value + (bx - w / 2) * zoom.value },
@@ -271,7 +285,7 @@ export function KnowledgeTree({ input, nowMs, time, selectedTopicId, labels, onP
       {w > 0 && (
         <>
           <Canvas style={styles.fill} accessible={false} importantForAccessibility="no-hide-descendants">
-            <Sky w={w} h={h} horizon={horizon} time={time} parallax={[far, mid, near]} />
+            <Sky w={w} h={h} horizon={horizon} time={time} parallax={[far, mid, near]} drift={[driftFar, driftNear]} period={period} />
             <Group transform={worldTransform}>
               <Ground time={time} />
               <Picture picture={tree} />

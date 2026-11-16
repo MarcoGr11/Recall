@@ -1,6 +1,6 @@
 import { hash } from './generate';
 import { FALL_THRESHOLD, isDue, vitality } from './mastery';
-import type { LimbSample, TreeInput, TreePrimitives } from './types';
+import type { Fork, LimbSample, TreeInput, TreePrimitives } from './types';
 
 /** Animation durations, ms. */
 export const DUR = { grow: 1200, leaf: 600, color: 800, fall: 1900 };
@@ -34,6 +34,10 @@ export interface LeafState {
 export interface BranchState {
   id: string;
   samples: LimbSample[];
+  forks: Fork[];
+  /** Canopy colour (average shown mastery of the leaves still on the branch) and fullness 0..1. */
+  tone: number;
+  lush: number;
   phase: number;
   /** Visible length animates from → to since born. */
   from: number;
@@ -46,6 +50,8 @@ export interface BranchState {
 export interface Scene {
   /** Reduce-motion: no wind, every transition is instant. */
   instant: boolean;
+  /** The trunk is only as tall as the highest branch needs: an empty tree is a sapling. */
+  trunk: { samples: LimbSample[]; from: number; to: number; born: number };
   branches: BranchState[];
 }
 
@@ -64,6 +70,12 @@ export function easeInOut(p: number): number {
 export function shownMastery(l: LeafState, t: number, instant: boolean): number {
   'worklet';
   return l.m0 + (l.m1 - l.m0) * easeInOut(progress(t, l.mT, DUR.color, instant));
+}
+
+export function trunkLength(scene: Scene, t: number): number {
+  'worklet';
+  const k = scene.trunk;
+  return k.from + (k.to - k.from) * easeInOut(progress(t, k.born, DUR.grow, scene.instant));
 }
 
 export function visibleLength(b: BranchState, t: number, instant: boolean): number {
@@ -99,6 +111,9 @@ export function buildScene(
     const state: BranchState = {
       id: branch.id,
       samples: branch.samples,
+      forks: branch.forks,
+      tone: 0,
+      lush: 0,
       phase: phaseOf(branch.id),
       from: pb ? (resized ? visibleLength(pb, t, instant) : pb.from) : 0,
       to: branch.length,
@@ -152,6 +167,11 @@ export function buildScene(
         due: isDue(topic, nowMs),
       });
     }
+    const kept = state.leaves.filter((l) => !l.fallen);
+    if (kept.length) {
+      state.tone = kept.reduce((sum, l) => sum + l.m1, 0) / kept.length;
+      state.lush = Math.min(1, 0.45 + (0.55 * kept.length) / 30);
+    }
     // removed topics: play the leaf animation backwards, then drop them on a later rebuild
     for (const gone of pb?.leaves ?? []) {
       if (topics.has(gone.id) && !gone.died) continue;
@@ -169,5 +189,15 @@ export function buildScene(
     branches.push({ ...gone, died, leaves: gone.leaves.map((l) => ({ ...l, died: l.died || died })) });
   }
 
-  return { instant, branches };
+  // trunk height follows the highest living branch
+  let reach = 0;
+  for (const b of prims.branches) {
+    // the branch base lies on the trunk centerline: its height above the trunk base is the distance along it
+    reach = Math.max(reach, Math.hypot(prims.trunk.samples[0].x - b.samples[0].x, prims.trunk.samples[0].y - b.samples[0].y));
+  }
+  const to = prims.branches.length ? Math.min(prims.trunk.length, reach + 120) : prims.trunk.length * 0.34;
+  const scene: Scene = { instant, trunk: { samples: prims.trunk.samples, from: to, to, born: NEVER }, branches };
+  if (prev?.trunk && prev.trunk.to !== to) scene.trunk = { ...scene.trunk, from: trunkLength(prev, t), born: t };
+  else if (prev?.trunk) scene.trunk = prev.trunk;
+  return scene;
 }

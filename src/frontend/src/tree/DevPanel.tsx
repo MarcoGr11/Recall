@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 export interface DevAction {
   label: string;
@@ -37,7 +37,7 @@ export function DevPanel({ actions, status }: { actions: DevAction[]; status: st
 }
 
 const styles = StyleSheet.create({
-  panel: { backgroundColor: 'rgba(16,24,20,0.82)', paddingHorizontal: 10, paddingBottom: 10, borderTopLeftRadius: 14, borderTopRightRadius: 14 },
+  panel: { backgroundColor: 'rgba(16,24,20,0.82)', paddingHorizontal: 10, paddingBottom: Platform.OS === 'ios' ? 30 : 10, borderTopLeftRadius: 14, borderTopRightRadius: 14 },
   head: { paddingVertical: 8 },
   status: { color: '#CFE8D2', fontSize: 12, fontWeight: '600' },
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },

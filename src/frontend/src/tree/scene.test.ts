@@ -19,6 +19,17 @@ describe('buildScene', () => {
     expect(b.leaves.map((l) => l.id)).toEqual(['t1', 't2']);
   });
 
+  it('keeps the trunk a sapling until a course needs it taller', () => {
+    const empty = build(null, { studentId: 's', courses: [] }, 0);
+    const data = input();
+    const grown = build(empty, data, 100);
+    expect(grown.trunk.to).toBeGreaterThan(empty.trunk.to);
+    expect(grown.trunk.born).toBe(100);
+    const base = grown.branches[0].samples[0];
+    const top = grown.trunk.samples.filter((s) => s.d <= grown.trunk.to).at(-1);
+    expect(top!.y).toBeLessThan(base.y);
+  });
+
   it('grows a new course from the trunk and opens its leaves after the tip reaches them', () => {
     const data = input();
     const first = build(null, data, 0);

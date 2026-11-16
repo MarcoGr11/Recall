@@ -39,9 +39,18 @@ export interface Limb {
   path: string;
 }
 
+/** Decorative side limb of a branch; `at` is the distance from the branch base where it forks off. */
+export interface Fork {
+  at: number;
+  samples: LimbSample[];
+  length: number;
+}
+
 export interface Branch extends Limb {
   courseId: string;
   slot: number;
+  /** One per segment. `path` already contains their outlines. */
+  forks: Fork[];
 }
 
 export interface Leaf {
