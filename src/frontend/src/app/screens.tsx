@@ -5,7 +5,7 @@ import { Icon, type IconName } from '../icons/Icon';
 import { KINDS, SCENE_LABEL, StateScene, type SceneKind } from '../scenes/StateScene';
 import { type Scheme, useTheme } from '../theme';
 
-const TOP = Platform.select({ ios: 54, android: (StatusBar.currentHeight ?? 24) + 8, default: 16 });
+export const TOP = Platform.select({ ios: 54, android: (StatusBar.currentHeight ?? 24) + 8, default: 16 });
 
 function Screen({ title, children }: { title: string; children: ReactNode }) {
   const t = useTheme();

@@ -1,6 +1,8 @@
 import { useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
 
+import { scenarioForTopic } from '../scenario/mockScenarios';
+import type { Scenario } from '../scenario/model';
 import { useTheme } from '../theme';
 import { TIMES, timeOfDayAt, type TimeOfDay } from './Background';
 import { DevPanel, type DevAction } from './DevPanel';
@@ -23,8 +25,11 @@ const mapTopic = (input: TreeInput, topicId: string, change: (t: Topic) => Topic
   courses: input.courses.map((c) => (c.topics.some((t) => t.id === topicId) ? { ...c, topics: c.topics.map((t) => (t.id === topicId ? change(t) : t)) } : c)),
 });
 
-/** `bottomInset` is the height of the translucent tab bar that floats over the bottom of the scene. */
-export default function KnowledgeTreeScreen({ bottomInset = 0 }: { bottomInset?: number }) {
+/**
+ * `bottomInset` is the height of the translucent tab bar that floats over the bottom of the scene.
+ * `onScenario` opens the decision trainer for a topic that has an approved scenario.
+ */
+export default function KnowledgeTreeScreen({ bottomInset = 0, onScenario }: { bottomInset?: number; onScenario?: (s: Scenario) => void }) {
   const theme = useTheme();
   const [today] = useState(Date.now);
   const [input, setInput] = useState(() => mockTree(today));
@@ -43,6 +48,7 @@ export default function KnowledgeTreeScreen({ bottomInset = 0 }: { bottomInset?:
   const topicCourse = selectedTopicId ? courseOf(selectedTopicId) : undefined;
   const topic = topicCourse?.topics.find((t) => t.id === selectedTopicId);
   const course: Course | undefined = selection && 'courseId' in selection ? input.courses.find((c) => c.id === selection.courseId) : undefined;
+  const scenario = topic && scenarioForTopic(topic.id);
 
   const labels = useMemo(() => {
     const out: Record<string, string> = {};
@@ -169,6 +175,16 @@ export default function KnowledgeTreeScreen({ bottomInset = 0 }: { bottomInset?:
                     Наступне повторення: {formatDate(topic.dueAt)}
                     {isDue(topic, nowMs) ? ' — пора повторити' : ''}
                   </Text>
+                  {scenario && onScenario && (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Пройти сценарій «${scenario.title}»`}
+                      onPress={() => onScenario(scenario)}
+                      style={styles.scenario}
+                    >
+                      <Text style={styles.scenarioText}>Пройти сценарій</Text>
+                    </Pressable>
+                  )}
                 </>
               ) : course ? (
                 <>
@@ -210,6 +226,8 @@ const styles = StyleSheet.create({
   cardText: { flex: 1 },
   cardTitle: { fontSize: 18, fontWeight: '700', color: '#17261B', marginBottom: 4 },
   cardLine: { fontSize: 15, color: '#33443A', marginTop: 2 },
+  scenario: { alignSelf: 'flex-start', marginTop: 12, minHeight: 44, paddingHorizontal: 20, borderRadius: 22, justifyContent: 'center', backgroundColor: '#2E7D4F' },
+  scenarioText: { fontSize: 15, fontWeight: '600', color: '#FFFFFF' },
   close: { minWidth: 32, minHeight: 32, alignItems: 'center', justifyContent: 'center' },
   closeText: { fontSize: 18, color: '#33443A' },
 });

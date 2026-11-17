@@ -1,10 +1,13 @@
 import { StatusBar } from 'expo-status-bar';
 import { useState } from 'react';
-import { Platform, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 
 import { BAR_TOTAL } from './src/app/barMetrics';
 import { ProfileScreen, ScenesScreen, StateScreen } from './src/app/screens';
 import { TabBar, type Tab } from './src/app/TabBar';
+import { SCENARIOS } from './src/scenario/mockScenarios';
+import type { Scenario } from './src/scenario/model';
+import { ScenarioScreen } from './src/scenario/ScenarioScreen';
 import { SchemeContext, useTheme, type Scheme } from './src/theme';
 import KnowledgeTreeScreen from './src/tree/KnowledgeTreeScreen';
 
@@ -16,13 +19,16 @@ const TABS: Tab[] = [
   { key: 'profile', title: 'Профіль', icon: 'user' },
 ];
 
-// web only: ?scenes=light|dark opens the dev gallery directly in that theme (used for screenshots)
-const query = Platform.OS === 'web' && typeof location !== 'undefined' ? new URLSearchParams(location.search).get('scenes') : null;
+// web only: ?scenes=light|dark opens the dev gallery directly in that theme, ?scenario=<id> opens a trainer (used for screenshots)
+const params = Platform.OS === 'web' && typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
+const query = params?.get('scenes') ?? null;
+const startScenario = SCENARIOS.find((s) => s.id === params?.get('scenario')) ?? null;
 
 function Shell({ scheme, onScheme }: { scheme: Scheme; onScheme: (s: Scheme) => void }) {
   const theme = useTheme();
   const [tab, setTab] = useState(query ? 'profile' : 'tree');
   const [scenes, setScenes] = useState(!!query);
+  const [scenario, setScenario] = useState<Scenario | null>(startScenario);
   const onTree = tab === 'tree';
   return (
     <View style={{ flex: 1, backgroundColor: theme.background }}>
@@ -38,7 +44,7 @@ function Shell({ scheme, onScheme }: { scheme: Scheme; onScheme: (s: Scheme) => 
           />
         )}
         {/* the scene runs under the translucent bar, so the tree screen gets the full height */}
-        {onTree && <KnowledgeTreeScreen bottomInset={BAR_TOTAL} />}
+        {onTree && <KnowledgeTreeScreen bottomInset={BAR_TOTAL} onScenario={setScenario} />}
         {tab === 'courses' && (
           <StateScreen
             title="Курси"
@@ -55,13 +61,21 @@ function Shell({ scheme, onScheme }: { scheme: Scheme; onScheme: (s: Scheme) => 
           (scenes ? <ScenesScreen onBack={() => setScenes(false)} /> : <ProfileScreen scheme={scheme} onScheme={onScheme} onOpenScenes={() => setScenes(true)} />)}
       </View>
       <TabBar tabs={TABS} active={tab} onChange={setTab} translucent={onTree} />
-      <StatusBar style={onTree ? 'light' : theme.dark ? 'light' : 'dark'} />
+      {/* the trainer covers everything, tab bar included, like a test; the tree stays mounted so "До теми" returns to the same topic */}
+      {/* ponytail: the tree keeps animating under the trainer; pause its frame callback if that shows up in battery use */}
+      {scenario && (
+        <View style={StyleSheet.absoluteFill}>
+          <ScenarioScreen scenario={scenario} onExit={() => setScenario(null)} />
+        </View>
+      )}
+      <StatusBar style={onTree && !scenario ? 'light' : theme.dark ? 'light' : 'dark'} />
     </View>
   );
 }
 
 export default function App() {
-  const [scheme, setScheme] = useState<Scheme>(query === 'light' || query === 'dark' ? query : 'system');
+  const forced = query ?? params?.get('theme');
+  const [scheme, setScheme] = useState<Scheme>(forced === 'light' || forced === 'dark' ? forced : 'system');
   return (
     <SchemeContext.Provider value={scheme}>
       <Shell scheme={scheme} onScheme={setScheme} />
