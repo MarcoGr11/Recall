@@ -29,7 +29,15 @@ const mapTopic = (input: TreeInput, topicId: string, change: (t: Topic) => Topic
  * `bottomInset` is the height of the translucent tab bar that floats over the bottom of the scene.
  * `onScenario` opens the decision trainer for a topic that has an approved scenario.
  */
-export default function KnowledgeTreeScreen({ bottomInset = 0, onScenario }: { bottomInset?: number; onScenario?: (s: Scenario) => void }) {
+export default function KnowledgeTreeScreen({
+  bottomInset = 0,
+  onScenario,
+  paused,
+}: {
+  bottomInset?: number;
+  onScenario?: (s: Scenario) => void;
+  paused?: boolean;
+}) {
   const theme = useTheme();
   const [today] = useState(Date.now);
   const [input, setInput] = useState(() => mockTree(today));
@@ -148,6 +156,7 @@ export default function KnowledgeTreeScreen({ bottomInset = 0, onScenario }: { b
           onPressNothing={() => setSelection(null)}
           onFps={__DEV__ ? setFps : undefined}
           bar={bottomInset ? { height: bottomInset, surface: theme.surface } : undefined}
+          paused={paused}
         />
       )}
 

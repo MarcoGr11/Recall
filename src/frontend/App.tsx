@@ -44,7 +44,7 @@ function Shell({ scheme, onScheme }: { scheme: Scheme; onScheme: (s: Scheme) => 
           />
         )}
         {/* the scene runs under the translucent bar, so the tree screen gets the full height */}
-        {onTree && <KnowledgeTreeScreen bottomInset={BAR_TOTAL} onScenario={setScenario} />}
+        {onTree && <KnowledgeTreeScreen bottomInset={BAR_TOTAL} onScenario={setScenario} paused={!!scenario} />}
         {tab === 'courses' && (
           <StateScreen
             title="Курси"
@@ -61,8 +61,7 @@ function Shell({ scheme, onScheme }: { scheme: Scheme; onScheme: (s: Scheme) => 
           (scenes ? <ScenesScreen onBack={() => setScenes(false)} /> : <ProfileScreen scheme={scheme} onScheme={onScheme} onOpenScenes={() => setScenes(true)} />)}
       </View>
       <TabBar tabs={TABS} active={tab} onChange={setTab} translucent={onTree} />
-      {/* the trainer covers everything, tab bar included, like a test; the tree stays mounted so "До теми" returns to the same topic */}
-      {/* ponytail: the tree keeps animating under the trainer; pause its frame callback if that shows up in battery use */}
+      {/* the trainer covers everything, tab bar included, like a test; the tree stays mounted (paused) so "До теми" returns to the same topic */}
       {scenario && (
         <View style={StyleSheet.absoluteFill}>
           <ScenarioScreen scenario={scenario} onExit={() => setScenario(null)} />

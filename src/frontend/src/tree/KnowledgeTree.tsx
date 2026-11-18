@@ -78,9 +78,11 @@ export interface KnowledgeTreeProps {
   onFps?: (fps: number) => void;
   /** A translucent tab bar lies over the bottom of the scene: blur that strip and tint it with the surface colour. */
   bar?: { height: number; surface: string };
+  /** Stops the animation while another screen covers the tree; it resumes where it stopped. */
+  paused?: boolean;
 }
 
-export function KnowledgeTree({ input, nowMs, time, selectedTopicId, labels, onPressTopic, onPressCourse, onPressNothing, onFps, bar }: KnowledgeTreeProps) {
+export function KnowledgeTree({ input, nowMs, time, selectedTopicId, labels, onPressTopic, onPressCourse, onPressNothing, onFps, bar, paused }: KnowledgeTreeProps) {
   const reduceMotion = useReduceMotion();
   const [box, setBox] = useState({ w: 0, h: 0 });
   const root = useRef<View>(null);
@@ -96,12 +98,19 @@ export function KnowledgeTree({ input, nowMs, time, selectedTopicId, labels, onP
 
   // ---- animation clock + scene (all per-frame work happens on the UI thread) ----
   const clock = useSharedValue(0);
+  const base = useSharedValue(0);
   const frames = useSharedValue(0);
   const fpsAt = useSharedValue(0);
   // stable identity: re-registering the callback on every render would restart the clock
   const onFrame = useCallback((info: FrameInfo) => {
     'worklet';
-    clock.value = info.timeSinceFirstFrame;
+    // timeSinceFirstFrame restarts from 0 after a pause, so carry on from the last clock value
+    if (info.timeSincePreviousFrame === null) {
+      base.value = clock.value;
+      frames.value = 0;
+      fpsAt.value = 0;
+    }
+    clock.value = base.value + info.timeSinceFirstFrame;
     if (!onFps) return;
     frames.value += 1;
     if (info.timeSinceFirstFrame - fpsAt.value >= 1000) {
@@ -109,9 +118,9 @@ export function KnowledgeTree({ input, nowMs, time, selectedTopicId, labels, onP
       frames.value = 0;
       fpsAt.value = info.timeSinceFirstFrame;
     }
-  }, [clock, frames, fpsAt, onFps]);
+  }, [clock, base, frames, fpsAt, onFps]);
   const frame = useFrameCallback(onFrame);
-  useEffect(() => frame.setActive(!reduceMotion), [frame, reduceMotion]);
+  useEffect(() => frame.setActive(!reduceMotion && !paused), [frame, reduceMotion, paused]);
 
   const last = useRef<Scene | null>(null);
   const scene = useSharedValue<Scene>({ instant: true, trunk: { samples: [], from: 0, to: 0, born: 0 }, branches: [] });

@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState, type ReactNode } from 'react';
+import { BackHandler, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { TOP } from '../app/screens';
 import { Icon, type IconName } from '../icons/Icon';
@@ -12,14 +12,32 @@ type Phase = 'intro' | 'step' | 'consequence' | 'debrief';
 
 /**
  * Branching decision trainer (Figma S19–S22): intro → step → consequence → … → debrief of the whole path.
- * A choice is final: there is no way back to the previous step.
+ * A choice is final: there is no way back to the previous step. Leaving mid-run asks first, the run is lost.
  */
 export function ScenarioScreen({ scenario, onExit }: { scenario: Scenario; onExit: () => void }) {
+  const [asking, setAsking] = useState(false);
+  return (
+    <View style={styles.flex}>
+      <Run scenario={scenario} onExit={onExit} asking={asking} setAsking={setAsking} />
+      {asking && <ConfirmExit onStay={() => setAsking(false)} onLeave={onExit} />}
+    </View>
+  );
+}
+
+function Run({ scenario, onExit, asking, setAsking }: { scenario: Scenario; onExit: () => void; asking: boolean; setAsking: (on: boolean) => void }) {
   const t = useTheme();
   const [phase, setPhase] = useState<Phase>('intro');
   const [picks, setPicks] = useState<Pick[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const total = depth(scenario);
+  const midRun = phase === 'step' || phase === 'consequence';
+  const back = () => (midRun ? setAsking(true) : onExit());
+
+  // Android back button: same as the arrow, and it closes the dialog when one is open
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => (asking ? setAsking(false) : back(), true));
+    return () => sub.remove();
+  });
 
   const restart = () => (setPicks([]), setSelected(null), setPhase('intro'));
   const at = position(scenario, phase === 'consequence' ? picks.slice(0, -1) : picks);
@@ -91,7 +109,7 @@ export function ScenarioScreen({ scenario, onExit }: { scenario: Scenario; onExi
     const finished = 'ending' in position(scenario, picks);
     return (
       <Layout
-        onBack={onExit}
+        onBack={back}
         backLabel="Вийти"
         action={{ label: finished ? 'До розбору' : 'Далі', onPress: () => (setSelected(null), setPhase(finished ? 'debrief' : 'step')) }}
       >
@@ -108,7 +126,7 @@ export function ScenarioScreen({ scenario, onExit }: { scenario: Scenario; onExi
 
   return (
     <Layout
-      onBack={onExit}
+      onBack={back}
       backLabel="Вийти"
       action={{
         label: 'Обрати дію',
@@ -202,6 +220,30 @@ function Option({ label, state, onPress }: { label: string; state: OptionState; 
   );
 }
 
+/** Plain overlay instead of Alert: Alert shows nothing on web. */
+function ConfirmExit({ onStay, onLeave }: { onStay: () => void; onLeave: () => void }) {
+  const t = useTheme();
+  return (
+    <View style={styles.scrim}>
+      <Pressable accessibilityLabel="Продовжити сценарій" style={StyleSheet.absoluteFill} onPress={onStay} />
+      <View accessibilityViewIsModal accessibilityRole="alert" style={[styles.dialog, { backgroundColor: t.surface }]}>
+        <Text accessibilityRole="header" style={[styles.h2, { color: t.onSurface }]}>
+          Вийти зі сценарію?
+        </Text>
+        <Text style={[styles.body, { color: t.onSurfaceVariant }]}>Прогрес не збережеться, і наступного разу сценарій почнеться спочатку.</Text>
+        <View style={styles.dialogActions}>
+          <Pressable accessibilityRole="button" onPress={onStay} style={styles.dialogButton}>
+            <Text style={[styles.buttonText, { color: t.primary }]}>Продовжити</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={onLeave} style={styles.dialogButton}>
+            <Text style={[styles.buttonText, { color: t.error }]}>Вийти</Text>
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 function Banner({ icon, title, text, tone }: { icon: IconName; title: string; text: string; tone?: 'error' }) {
   const t = useTheme();
   const fg = tone ? t.onErrorContainer : t.onPrimaryContainer;
@@ -240,4 +282,8 @@ const styles = StyleSheet.create({
   bannerTitle: { fontSize: 14, fontWeight: '700', marginBottom: 2 },
   button: { minHeight: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
   buttonText: { fontSize: 15, fontWeight: '600' },
+  scrim: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 24 },
+  dialog: { borderRadius: 24, padding: 24, gap: 12 },
+  dialogActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
+  dialogButton: { minHeight: 44, paddingHorizontal: 12, justifyContent: 'center' },
 });
