@@ -85,8 +85,8 @@ HTTP-з'єднання утримується на весь час виклик�
 
 1. Backend API записує GenerationJob у PostgreSQL зі статусом queued, ставить задачу в чергу з `jobId := idempotency_key := SHA-256(тип задачі, ідентифікатор джерела, версія джерела, generation_no)` і повертає 202 Accepted з ідентифікатором задачі. Номер генерації generation_no збільшується на 1 при повторній генерації за тим самим джерелом після стану dead або відхилення чернеток: BullMQ ігнорує постановку задачі з jobId, що вже зберігається в Redis (зокрема у стані failed), тому без generation_no повторна генерація була б неможливою. Перед постановкою BudgetGuard перевіряє добовий ліміт вартості; після його досягнення API повертає 429.
 2. Глобальний ліміт паралелізму задається на черзі: `queue.setGlobalConcurrency(2)` — не більше 2 активних задач у системі незалежно від кількості worker-процесів; `concurrency: 2` у Generation Worker є лише локальним верхнім порогом одного процесу. Worker викликає Claude API (модель `claude-haiku-5-5`) з timeout 60 с, валідує результат за JSON-схемою і зберігає чернетку зі статусом draft, записуючи кількість токенів і вартість виклику в generation_jobs.
-3. Повторні спроби виконує лише BullMQ: `attempts: 3`, `backoff: {type: 'exponential', delay: 5000}` (затримки 5 с і 10 с). Клієнт SDK Anthropic створюється з `maxRetries: 0`, оскільки за замовчуванням SDK виконує 2 власні повторні спроби для 408 / 409 / 429 / 5xx, що разом із 3 спробами BullMQ дало б до 9 HTTP-викликів на задачу.
-4. Після третьої невдалої спроби задача залишається в стані failed з причиною збою (dead-letter queue) і автоматично не повторюється.
+3. Повторні спроби виконує лише BullMQ: `attempts: 3`, `backoff: {type: 'exponential', delay: 5000}` (затримки 5 с і 10 с). Клієнт SDK Anthropic створюється з `maxRetries: 0`, оскільки за замовчуванням SDK виконує 2 власні повторні спроби для 408 / 409 / 429 / 5xx, що разом із 3 спробами BullMQ дало б до 9 HTTP-викликів на задачу. Для HTTP 429 власна стратегія backoff BullMQ встановлює затримку, що дорівнює більшому зі значень експоненційної затримки і заголовка retry-after відповіді Claude API.
+4. Після третьої невдалої спроби задача залишається в стані failed з причиною збою (dead-letter queue) і автоматично не повторюється. Неповторювані помилки (HTTP 400, 401, 403, порожній текст джерела, досягнення добового ліміту вартості під час виконання) завершують задачу без повторів через UnrecoverableError BullMQ; GenerationJob отримує статус dead.
 5. Backend API підписаний на QueueEvents і передає події completed / failed у ProgressPublisher, який через ProgressGateway надсилає подію викладачу (SRS-FUN-30).
 6. Redis працює з `appendonly yes`, `appendfsync everysec`.
 
@@ -131,6 +131,7 @@ HTTP-з'єднання утримується на весь час виклик�
 #### Історія змін
 
 - 24.11.2026 — уточнення без зміни рішення: ключ ідемпотентності доповнено номером генерації generation_no (знахідка 10 незалежного аудиту); модель Claude Haiku 4.5 замінено на Claude Haiku 5.5 з перерахунком оцінки вартості; облік токенів і вартості перенесено з generation_log у generation_jobs; статус чернетки pending перейменовано на draft. Рішення автора — [17-AI Insights.md](./17-AI%20Insights.md), Запис 16.
+- 24.11.2026 — уточнення без зміни рішення за результатами нормоконтролю алгоритмів: затримка для HTTP 429 враховує заголовок retry-after; неповторювані помилки і досягнення бюджету під час виконання переводять задачу в dead без повторів. Рішення автора — [17-AI Insights.md](./17-AI%20Insights.md), Запис 19.
 
 <!-- adr-001:end -->
 
@@ -1121,6 +1122,192 @@ erDiagram
 Ключі UUID версії 4 (`gen_random_uuid()`) залишено для всіх таблиць: за цільового обсягу (50 000 відповідей, умови [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01)) фрагментація B-Tree від випадкового порядку вставки не впливає на метрики Latency. Перехід на `uuidv7()` можливий після оновлення до PostgreSQL 18 без зміни типу стовпців. GIN-індекс для `audit_log.meta` не створюється: жоден сценарій SRS не виконує пошуку за ключами `meta`.
 
 ## 2.8. Моделювання логіки критичних вузлів системи
+
+Формалізовано три алгоритми, від яких залежать коректність навчальної моделі і вартість експлуатації: оновлення стану SM-2 після завершення спроби (компонент SM2Calculator, підрозділ 2.3), формування персонального плану на день (DailyPlanPrioritizer) і обробка задачі генерації worker-процесом (Generation Worker, ADR-001). Протокол нормоконтролю алгоритмів — [17-AI Insights.md](./17-AI%20Insights.md), Запис 19.
+
+Правила запису: `:=` — присвоювання; `=`, `≠`, `<`, `≤`, `>`, `≥` — порівняння; складені умови поєднуються операторами AND, OR, NOT; елементи колекцій позначаються індексами `T[i]`, `Cand[j]`, `Items[i]`; `|X|` — потужність множини або довжина рядка; `⌈x⌉` — округлення вгору; NULL — відсутнє значення. Поточна дата `today := Date(now, Europe/Kyiv)`. Блок-схеми виконано кодом Mermaid.js (`flowchart TD`) з позначеннями блоків за ДСТУ 19.701 (табл. 2.14).
+
+Таблиця 2.14 – Відповідність блоків блок-схем ДСТУ 19.701 і синтаксису Mermaid.js
+
+| Блок ДСТУ 19.701 | Призначення | Синтаксис Mermaid.js |
+|---|---|---|
+| Термінатор | Початок і кінець алгоритму | `id(["…"])` |
+| Процес | Обчислення, присвоювання, запит до БД | `id["…"]` |
+| Рішення | Умова з одним входом і двома виходами «так» / «ні» | `id{"…"}` |
+| Дані | Введення вхідних даних, виведення результату або відповіді | `id[/"…"/]` |
+| Визначений процес | Виклик підпрограми або зовнішнього API | `id[["…"]]` |
+| Підготовка (модифікація) | Заголовок циклу з параметром і межами | `id{{"…"}}` |
+
+### 2.8.1. Оновлення стану SM-2 після завершення спроби
+
+Вхідні дані: `attemptId`, `userId` (з access-токена), `now`. Вихідні дані: `Result[1…n]` — для кожної теми спроби `(topicId, correct, total, q, ef, interval, repetitions, next_review)`. Вимоги: [SRS-FUN-17](./srs.md#srs-fun-17), [SRS-FUN-19](./srs.md#srs-fun-19), [SRS-FUN-54](./srs.md#srs-fun-54), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01).
+
+1. `BEGIN`; `A := SELECT … FROM attempts WHERE id = attemptId AND user_id = userId FOR UPDATE`.
+2. Якщо `A = NULL` — `ROLLBACK`, відповідь 404; кінець.
+3. Якщо `A.status ≠ 'in_progress'` — `ROLLBACK`, відповідь — збережений `Result` (повторне завершення не змінює ReviewState); кінець.
+4. `today := Date(now, Europe/Kyiv)`; `T := {x.topic_id : x ∈ attempt_questions(A)}`; `n := |T|`. Якщо `n = 0` — `ROLLBACK`, відповідь 500 (порушення інваріанта «спроба містить ≥ 1 питання»); кінець.
+5. Для `i := 1, …, n`:
+   1. `Q[i] := {x ∈ attempt_questions(A) : x.topic_id = T[i]}`; `total := |Q[i]|`; `correct := |{x ∈ Q[i] : x.is_correct = TRUE}|` (питання без відповіді — неправильні); `p := correct / total` (`total ≥ 1` за побудовою `T`).
+   2. `q := Quality(p)` за табл. А.1: `p ≥ 0,9 → 5`; `0,75 ≤ p < 0,9 → 4`; `0,6 ≤ p < 0,75 → 3`; `0,4 ≤ p < 0,6 → 2`; `0 < p < 0,4 → 1`; `p = 0 → 0`.
+   3. `R := SELECT … FROM review_states WHERE user_id = userId AND topic_id = T[i] FOR UPDATE`; якщо `R = NULL` — `R.ef := 2,50`, `R.interval := 0`, `R.repetitions := 0`.
+   4. Якщо `q ≥ 3`: `R.interval := 1` при `R.repetitions = 0`; `R.interval := 6` при `R.repetitions = 1`; інакше `R.interval := ⌈R.interval × R.ef⌉` (EF до оновлення). Далі `R.repetitions := R.repetitions + 1`; `R.ef := Round(R.ef + 0,1 − (5 − q) × (0,08 + (5 − q) × 0,02), 2)`; якщо `R.ef < 1,30` — `R.ef := 1,30`.
+   5. Якщо `q < 3`: `R.repetitions := 0`; `R.interval := 1`; `R.ef` не змінюється.
+   6. `R.next_review := today + R.interval`; `R.last_quality := q`; `UPSERT review_states`; `Result[i] := (T[i], correct, total, q, R.ef, R.interval, R.repetitions, R.next_review)`.
+6. Якщо `now ≤ A.deadline_at` — `A.status := 'finished'`, інакше `A.status := 'expired'`; `A.finished_at := now`; `COMMIT`.
+7. Якщо `COMMIT` завершився помилкою (PostgreSQL недоступний, конфлікт серіалізації) — відповідь 503 з `Retry-After`; стан не змінено. Інакше — відповідь 200 з `Result`; кінець.
+
+Цикл кроку 5 обмежено `n ≤ 100` (кількість питань спроби). Блокування рядка спроби `FOR UPDATE` і перевірка статусу на кроці 3 гарантують одне оновлення ReviewState на спробу за паралельних запитів завершення.
+
+```mermaid
+flowchart TD
+    s(["Початок"]) --> in[/"attemptId, userId, now"/]
+    in --> lockA["BEGIN<br/>A := SELECT attempts WHERE id = attemptId<br/>AND user_id = userId FOR UPDATE"]
+    lockA --> c1{"A = NULL"}
+    c1 -- так --> o404[/"ROLLBACK; відповідь 404"/] --> f(["Кінець"])
+    c1 -- ні --> c2{"A.status ≠ 'in_progress'"}
+    c2 -- так --> oSaved[/"ROLLBACK; збережений Result"/] --> f
+    c2 -- ні --> init["today := Date(now, Europe/Kyiv)<br/>T := теми питань спроби A; n := |T|"]
+    init --> c0{"n = 0"}
+    c0 -- так --> o500[/"ROLLBACK; відповідь 500"/] --> f
+    c0 -- ні --> loop{{"i := 1, …, n"}}
+    loop -- "i ≤ n" --> cnt["total := |Q[i]|; correct := |{x ∈ Q[i] : x.is_correct = TRUE}|<br/>p := correct / total"]
+    cnt --> qf[["q := Quality(p) за табл. А.1"]]
+    qf --> rs["R := SELECT review_states<br/>WHERE user_id = userId AND topic_id = T[i] FOR UPDATE"]
+    rs --> c3{"R = NULL"}
+    c3 -- так --> rinit["R.ef := 2,50; R.interval := 0; R.repetitions := 0"] --> c4
+    c3 -- ні --> c4{"q ≥ 3"}
+    c4 -- ні --> lapse["R.repetitions := 0; R.interval := 1"] --> nr
+    c4 -- так --> c5{"R.repetitions = 0"}
+    c5 -- так --> i1["R.interval := 1"] --> upd
+    c5 -- ні --> c6{"R.repetitions = 1"}
+    c6 -- так --> i6["R.interval := 6"] --> upd
+    c6 -- ні --> imul["R.interval := ⌈R.interval × R.ef⌉"] --> upd
+    upd["R.repetitions := R.repetitions + 1<br/>R.ef := Round(R.ef + 0,1 − (5 − q) × (0,08 + (5 − q) × 0,02), 2)"] --> c7{"R.ef #lt; 1,30"}
+    c7 -- так --> efmin["R.ef := 1,30"] --> nr
+    c7 -- ні --> nr["R.next_review := today + R.interval; R.last_quality := q<br/>UPSERT review_states; Result[i] := (T[i], correct, total, q, R)"]
+    nr -- "i := i + 1" --> loop
+    loop -- "цикл завершено" --> c8{"now ≤ A.deadline_at"}
+    c8 -- так --> stF["A.status := 'finished'"] --> commit
+    c8 -- ні --> stE["A.status := 'expired'"] --> commit
+    commit["A.finished_at := now; COMMIT"] --> c9{"COMMIT = OK"}
+    c9 -- ні --> o503[/"Відповідь 503, Retry-After"/] --> f
+    c9 -- так --> out[/"Відповідь 200: Result"/] --> f
+```
+
+Рисунок 2.6 – Блок-схема алгоритму оновлення стану SM-2 після завершення спроби
+
+### 2.8.2. Формування персонального плану на день
+
+Вхідні дані: `userId`, `now`; параметри `Limit := 30`, `Qmin := 2`, `Qmax := 8`, `Kmax := ⌊Limit / Qmin⌋ = 15`. Вихідні дані: `Plan[1…k]` — для кожної теми перелік питань — і `TotalQ`. Вимоги: [SRS-FUN-20](./srs.md#srs-fun-20), [SRS-FUN-21](./srs.md#srs-fun-21), [SRS-FUN-29](./srs.md#srs-fun-29), [SRS-FUN-50](./srs.md#srs-fun-50).
+
+1. `today := Date(now, Europe/Kyiv)`; `Topics := теми всіх курсів, у яких userId має роль student`; `m := |Topics|`; `Cand := ∅`. Якщо `m = 0` — `Plan := ∅`, `TotalQ := 0`; кінець.
+2. Для `i := 1, …, m`:
+   1. `nr := Coalesce(R(Topics[i]).next_review, today)`; `mast := Coalesce(Mastery(Topics[i]), 0)`; `dE := min{e.event_date − today : e ∈ Events(Topics[i]) AND e.event_date ≥ today}`, `dE := NULL`, якщо такого заходу немає.
+   2. Якщо `nr ≤ today OR (dE ≠ NULL AND dE ≤ 14 AND mast < 0,8)`: `dOver := max(0, today − nr)`; `P[i] := dOver`, якщо `dE = NULL`, інакше `P[i] := dOver + 10 / max(1, dE)`; `Cand := Cand ∪ {Topics[i]}`.
+3. Якщо `|Cand| = 0` — `Plan := ∅`, `TotalQ := 0`; кінець.
+4. Упорядкувати `Cand` за спаданням `P`, за рівних `P` — за зростанням `position` і `id`; `k := min(|Cand|, Kmax)`; `Cand := Cand[1…k]`.
+5. `S := Σ P[j]`, `j = 1, …, k`. Якщо `S = 0`: `w[j] := 1`, `S := k`; інакше `w[j] := P[j]`.
+6. `Quota[j] := min(Qmax, max(Qmin, Round(Limit × w[j] / S)))`, `j = 1, …, k`. Поки `Σ Quota[j] > Limit`: `j* := max{j : Quota[j] > Qmin}`; `Quota[j*] := Quota[j*] − 1`. Цикл виконується не більше `(Qmax − Qmin) × k ≤ 90` разів і завжди завершується, оскільки `Qmin × k ≤ Limit`.
+7. `Carry := 0`; `TotalQ := 0`. Для `j := 1, …, k`:
+   1. `Want := min(Qmax, Quota[j] + Carry)`.
+   2. `Avail := {x ∈ questions(Cand[j]) : x.status = 'approved' AND x ∉ LastAttempt(userId)}`, упорядковані: спершу питання з неправильною відповіддю студента в попередніх спробах, далі за зростанням часу останньої видачі, далі випадково.
+   3. `Take := min(Want, |Avail|)`; `Plan[j] := Avail[1…Take]`; `Carry := Quota[j] + Carry − Take`; `TotalQ := TotalQ + Take`.
+8. Вивести `Plan`, `TotalQ` (`TotalQ ≤ Limit`); теми з `Take = 0` до плану не входять; кінець.
+
+```mermaid
+flowchart TD
+    s(["Початок"]) --> in[/"userId, now<br/>Limit := 30; Qmin := 2; Qmax := 8; Kmax := 15"/]
+    in --> p0["today := Date(now, Europe/Kyiv)<br/>Topics := теми курсів з роллю student; m := |Topics|; Cand := ∅"]
+    p0 --> c0{"m = 0"}
+    c0 -- так --> empty[/"Plan := ∅; TotalQ := 0"/] --> f(["Кінець"])
+    c0 -- ні --> loop1{{"i := 1, …, m"}}
+    loop1 -- "i ≤ m" --> p1["nr := Coalesce(R(Topics[i]).next_review, today)<br/>mast := Coalesce(Mastery(Topics[i]), 0)<br/>dE := дні до найближчого заходу ≥ today або NULL"]
+    p1 --> c1{"nr ≤ today OR<br/>(dE ≠ NULL AND dE ≤ 14 AND mast #lt; 0,8)"}
+    c1 -- ні --> loop1
+    c1 -- так --> pd["dOver := max(0, today − nr)"] --> c2{"dE = NULL"}
+    c2 -- так --> pa["P[i] := dOver"] --> add
+    c2 -- ні --> pb["P[i] := dOver + 10 / max(1, dE)"] --> add
+    add["Cand := Cand ∪ {Topics[i]}"] -- "i := i + 1" --> loop1
+    loop1 -- "цикл завершено" --> c3{"|Cand| = 0"}
+    c3 -- так --> empty
+    c3 -- ні --> sort["Сортування Cand за спаданням P, далі position, id<br/>k := min(|Cand|, Kmax); S := Σ P[j], j = 1…k"]
+    sort --> c4{"S = 0"}
+    c4 -- так --> w1["w[j] := 1, j = 1…k; S := k"] --> quota
+    c4 -- ні --> w2["w[j] := P[j], j = 1…k"] --> quota
+    quota["Quota[j] := min(Qmax, max(Qmin, Round(Limit × w[j] / S))), j = 1…k"] --> c5{"Σ Quota[j] > Limit"}
+    c5 -- так --> dec["j* := max{j : Quota[j] > Qmin}<br/>Quota[j*] := Quota[j*] − 1"] --> c5
+    c5 -- ні --> p3["Carry := 0; TotalQ := 0"] --> loop2{{"j := 1, …, k"}}
+    loop2 -- "j ≤ k" --> p4["Want := min(Qmax, Quota[j] + Carry)<br/>Avail := approved питання Cand[j] без питань попередньої спроби,<br/>упорядковані: помилкові, давно не видані, випадково"]
+    p4 --> p5["Take := min(Want, |Avail|); Plan[j] := Avail[1…Take]<br/>Carry := Quota[j] + Carry − Take; TotalQ := TotalQ + Take"]
+    p5 -- "j := j + 1" --> loop2
+    loop2 -- "цикл завершено" --> out[/"Plan, TotalQ"/] --> f
+```
+
+Рисунок 2.7 – Блок-схема алгоритму формування персонального плану на день
+
+### 2.8.3. Обробка задачі генерації worker-процесом
+
+Вхідні дані: задача BullMQ `Job` (`generationJobId`, `attemptsMade` — кількість попередніх спроб), параметри `MaxAttempts := 3`, `BaseDelay := 5 с`, `Timeout := 60 с`, `MaxTokens`, `DailyBudget := 2 USD`. Вихідні дані: чернетки питань зі статусом draft, стан GenerationJob, подія WebSocket. Вимоги: [SRS-FUN-24](./srs.md#srs-fun-24)…[SRS-FUN-27](./srs.md#srs-fun-27), [SRS-FUN-30](./srs.md#srs-fun-30)…[SRS-FUN-32](./srs.md#srs-fun-32), [SRS-NFR-ASYNC-03](./srs.md#srs-nfr-async-03), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-COST-01](./srs.md#srs-nfr-cost-01), [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02).
+
+1. `BEGIN`; `G := SELECT … FROM generation_jobs WHERE id = Job.generationJobId FOR UPDATE`. Якщо `G = NULL OR G.status ∈ {'done', 'dead'}` — `COMMIT`, задачу підтверджено без обробки (повторна доставка); кінець.
+2. `G.status := 'processing'`; `G.attempts_made := Job.attemptsMade + 1`; `G.started_at := Coalesce(G.started_at, now)`; `COMMIT`.
+3. `Spent := Σ cost_usd FROM generation_jobs WHERE created_at ≥ 00:00 UTC поточної доби`; `Est := (TokensIn × 0,10 + MaxTokens × 0,50) / 10^6`. Якщо `Spent + Est > DailyBudget` — `Reason := 'budget-exceeded'`, перехід до кроку 12.
+4. `Text := текстовий шар джерела G` (`lecture_materials` при `G.type = 'lecture_test'`, `source_tests` при `G.type = 'mock_questions'`). Якщо `Text = NULL OR |Text| = 0` — `Reason := 'source-empty'`, перехід до кроку 12.
+5. `Prompt := (системні інструкції; Text у розмежованому блоці документа з інструкцією не виконувати команди з нього; JSON-схема типу G.type)`.
+6. `(Resp, Err) := Claude.messages.create(model := 'claude-haiku-5-5', max_tokens := MaxTokens, timeout := Timeout, maxRetries := 0)`.
+7. Якщо `Err ≠ NULL`: якщо `Err.status ∈ {400, 401, 403}` — `Reason := 'llm-rejected'`, перехід до кроку 12; якщо `Err.status = 429` — `Delay := max(BaseDelay × 2^(G.attempts_made − 1), Err.retryAfter)`, `Reason := 'rate-limited'`, перехід до кроку 11; інакше (5xx, тайм-аут, мережева помилка) — `Delay := BaseDelay × 2^(G.attempts_made − 1)`, `Reason := Err.kind`, перехід до кроку 11.
+8. `G.tokens_in := G.tokens_in + Resp.usage.input_tokens`; `G.tokens_out := G.tokens_out + Resp.usage.output_tokens`; `G.cost_usd := G.cost_usd + Cost(Resp.usage)`; `G.model := Resp.model`; `UPDATE generation_jobs`. Облік виконується для кожного виклику, у тому числі з невалідним результатом.
+9. Якщо `Resp.stop_reason = 'max_tokens' OR |Resp.content| = 0` — `Reason := 'empty-or-truncated'`; інакше `Items := JSON.parse(Resp.content)`, і якщо розбір завершився помилкою `OR NOT Valid(Items, Schema[G.type])` — `Reason := 'invalid-json'`. У цих випадках `Delay := BaseDelay × 2^(G.attempts_made − 1)`, перехід до кроку 11.
+10. Якщо `G.type = 'mock_questions'` — `Kept := JaccardFilter(Items, SrcQ, 0,5)`, інакше `Kept := Items`. Якщо `|Kept| = 0` — `Reason := 'all-variants-similar'`, `Delay := BaseDelay × 2^(G.attempts_made − 1)`, перехід до кроку 11. Інакше: `BEGIN`; для `i := 1, …, |Kept|` — `INSERT INTO questions (…, status := 'draft', generation_job_id := G.id, position := i) ON CONFLICT (generation_job_id, position) DO NOTHING`; `G.status := 'done'`; `G.drafts_count := |Kept|`; `G.finished_at := now`; `COMMIT`; подія `generation.done` у кімнату `user:{G.requested_by}`; кінець.
+11. Повторювана помилка. Якщо `G.attempts_made ≥ MaxAttempts` — перехід до кроку 12. Інакше `G.status := 'failed'`; `G.error := Reason`; BullMQ повторює задачу через `Delay` (5 с після першої спроби, 10 с після другої); кінець.
+12. Неповторювана помилка або вичерпано спроби: `G.status := 'dead'`; `G.error := Reason`; `G.finished_at := now`; `UnrecoverableError` (задача залишається в стані failed BullMQ — dead-letter queue); подія `generation.dead` у кімнату `user:{G.requested_by}`; кінець.
+
+Помилка PostgreSQL на будь-якому кроці обробляється як повторювана з `Reason := 'db-unavailable'` (крок 11): результат виклику Claude API за цієї спроби не зберігається, повтор виконується з тим самим `G.id`, а обмеження UNIQUE (generation_job_id, position) виключає дублікати чернеток при повторній доставці.
+
+Підпрограма `JaccardFilter(Items, SrcQ, θ)`: `Norm(s)` — рядок у нижньому регістрі без розділових знаків; `Tri(s)` — множина триграм слів `Norm(s)`; для `|Words(a)| ≥ 3 AND |Words(b)| ≥ 3`: `J(a, b) := |Tri(a) ∩ Tri(b)| / |Tri(a) ∪ Tri(b)|`; інакше `J(a, b) := 1`, якщо `Norm(a) = Norm(b)`, і `J(a, b) := 0` в іншому разі. Для `i := 1, …, |Items|` і `j := 1, …, |SrcQ|` обчислюється `J(Items[i].stem, SrcQ[j].stem)`; `Items[i]` входить до `Kept`, якщо `max_j J ≤ θ`. Знаменник `|Tri(a) ∪ Tri(b)| ≥ 1` за умови `|Words(a)| ≥ 3`.
+
+```mermaid
+flowchart TD
+    s(["Початок"]) --> in[/"Job: generationJobId, attemptsMade<br/>MaxAttempts := 3; BaseDelay := 5 с; DailyBudget := 2 USD"/]
+    in --> g["BEGIN; G := SELECT generation_jobs<br/>WHERE id = Job.generationJobId FOR UPDATE"]
+    g --> c1{"G = NULL OR<br/>G.status ∈ {'done', 'dead'}"}
+    c1 -- так --> ack["COMMIT; задачу підтверджено без обробки"] --> f(["Кінець"])
+    c1 -- ні --> p1["G.status := 'processing'<br/>G.attempts_made := Job.attemptsMade + 1; COMMIT"]
+    p1 --> p2["Spent := Σ cost_usd задач поточної доби UTC<br/>Est := (TokensIn × 0,10 + MaxTokens × 0,50) / 10^6"]
+    p2 --> c2{"Spent + Est > DailyBudget"}
+    c2 -- так --> rb["Reason := 'budget-exceeded'"] --> dead
+    c2 -- ні --> p3["Text := текстовий шар джерела G"]
+    p3 --> c3{"Text = NULL OR |Text| = 0"}
+    c3 -- так --> re["Reason := 'source-empty'"] --> dead
+    c3 -- ні --> p4["Prompt := (інструкції; Text у розмежованому блоці;<br/>JSON-схема G.type)"]
+    p4 --> llm[["(Resp, Err) := Claude.messages.create(Prompt,<br/>timeout := 60 с, maxRetries := 0)"]]
+    llm --> c4{"Err ≠ NULL"}
+    c4 -- так --> c5{"Err.status ∈ {400, 401, 403}"}
+    c5 -- так --> rl["Reason := 'llm-rejected'"] --> dead
+    c5 -- ні --> c6{"Err.status = 429"}
+    c6 -- так --> d429["Delay := max(BaseDelay × 2^(G.attempts_made − 1), Err.retryAfter)<br/>Reason := 'rate-limited'"] --> retry
+    c6 -- ні --> d5xx["Delay := BaseDelay × 2^(G.attempts_made − 1)<br/>Reason := Err.kind"] --> retry
+    c4 -- ні --> acc["G.tokens_in := G.tokens_in + Resp.usage.input_tokens<br/>G.tokens_out := G.tokens_out + Resp.usage.output_tokens<br/>G.cost_usd := G.cost_usd + Cost(Resp.usage); UPDATE"]
+    acc --> c7{"Resp.stop_reason = 'max_tokens'<br/>OR |Resp.content| = 0"}
+    c7 -- так --> rt["Reason := 'empty-or-truncated'"] --> dstd
+    c7 -- ні --> parse["Items := JSON.parse(Resp.content)"]
+    parse --> c8{"помилка розбору OR<br/>NOT Valid(Items, Schema[G.type])"}
+    c8 -- так --> rj["Reason := 'invalid-json'"] --> dstd
+    c8 -- ні --> c9{"G.type = 'mock_questions'"}
+    c9 -- так --> jac[["Kept := JaccardFilter(Items, SrcQ, 0,5)"]] --> c10
+    c9 -- ні --> kall["Kept := Items"] --> c10
+    c10{"|Kept| = 0"}
+    c10 -- так --> rs["Reason := 'all-variants-similar'"] --> dstd
+    c10 -- ні --> save["BEGIN; INSERT questions (status := 'draft', position := i),<br/>i = 1…|Kept|, ON CONFLICT DO NOTHING<br/>G.status := 'done'; G.drafts_count := |Kept|; COMMIT"]
+    save --> evok[/"Подія generation.done у кімнату user:{G.requested_by}"/] --> f
+    dstd["Delay := BaseDelay × 2^(G.attempts_made − 1)"] --> retry
+    retry{"G.attempts_made ≥ MaxAttempts"}
+    retry -- ні --> rf["G.status := 'failed'; G.error := Reason<br/>повтор задачі BullMQ через Delay"] --> f
+    retry -- так --> dead["G.status := 'dead'; G.error := Reason; G.finished_at := now<br/>UnrecoverableError"]
+    dead --> evd[/"Подія generation.dead у кімнату user:{G.requested_by}"/] --> f
+```
+
+Рисунок 2.8 – Блок-схема алгоритму обробки задачі генерації worker-процесом
 
 ## 2.9. Інтеграційний аудит та висновок про готовність архітектури
 
