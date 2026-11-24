@@ -378,7 +378,7 @@ paths:
       operationId: getDailyPlan
       summary: План на день
       description: |-
-        Формує план з тем-кандидатів усіх курсів студента: ліміт 30 питань, 2…8 на тему пропорційно пріоритету P.
+        Повертає попередній перегляд плану з тем-кандидатів усіх курсів студента: ліміт 30 питань, 2…8 на тему пропорційно пріоритету P, не більше 15 тем. Питання видаються під час POST /attempts у режимі daily_plan за планом, сформованим повторно.
 
         Ролі: student.
       x-srs:
@@ -1885,7 +1885,7 @@ paths:
       operationId: startAttempt
       summary: Початок спроби
       description: |-
-        Створює спробу в режимі daily_plan, practice або mock_test, видає питання без ознаки правильності з рандомізованим порядком і встановлює deadlineAt.
+        Створює спробу в режимі daily_plan, practice або mock_test і видає питання без ознаки правильності з рандомізованим порядком. deadlineAt := startedAt + ліміт часу зразка (mock_test) або startedAt + min(2 хв × кількість питань, 60 хв) (daily_plan, practice). У режимі daily_plan план формується повторно на момент запиту. Наявна незавершена спроба того самого режиму з чинним лімітом часу → 409 attempt-in-progress; прострочена спроба попередньо завершується зі статусом expired.
 
         Ролі: student.
       x-srs:
@@ -2018,7 +2018,7 @@ paths:
       operationId: submitAnswer
       summary: Фіксація відповіді
       description: |-
-        Фіксує відповідь ідемпотентно за (attemptId, questionId): повторне надсилання замінює обрані варіанти без нового запису. Публікує подію прогресу в кімнату курсу.
+        Фіксує відповідь ідемпотентно за (attemptId, questionId): повторне надсилання замінює обрані варіанти без нового запису. Публікує подію прогресу в кімнату курсу, до якого належить питання.
 
         Ролі: student.
       x-srs:
@@ -2680,6 +2680,15 @@ components:
                 title: Користувач уже є учасником курсу
                 status: 409
                 detail: Повторне приєднання до курсу не виконується.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            attemptInProgress:
+              summary: Незавершена спроба
+              value:
+                type: /problems/attempt-in-progress
+                title: Є незавершена спроба
+                status: 409
+                detail: Спроба 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91 цього режиму ще триває.
                 instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
                 requestId: req-7f3a9c2e
             idempotencyInProgress:

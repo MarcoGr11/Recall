@@ -215,7 +215,7 @@ flowchart TB
         end
         subgraph internal["Мережа internal (без опублікованих портів)"]
             api["<b>Backend API</b><br/>[Container: Node.js 22, Express, Socket.io]<br/>Модульний моноліт: auth, courses, testing,<br/>scheduling, generation, monitoring"]
-            worker["<b>Generation Worker</b><br/>[Container: Node.js 22, BullMQ]<br/>Та сама кодова база, окрема точка входу;<br/>виклик LLM, валідація, чернетки"]
+            worker["<b>Generation Worker</b><br/>[Container: Node.js 22, BullMQ]<br/>Та сама кодова база, окрема точка входу;<br/>виклик LLM, валідація, чернетки;<br/>періодичні задачі maintenance"]
             backup["<b>Backup Job</b><br/>[Container: pg_dump, cron]<br/>Щоденна копія на окремий носій"]
             db[("<b>PostgreSQL 16</b><br/>[Container: Database]<br/>Користувачі, курси, відповіді,<br/>ReviewState, чернетки, журнали")]
             redis[("<b>Redis 7</b><br/>[Container: Redis, AOF]<br/>Черга BullMQ, події задач")]
@@ -263,7 +263,7 @@ flowchart TB
 | Mobile App | Container | React Native, Expo | Рольовий інтерфейс студента і викладача; фіксація background-переходів, буферизація подій, блокування знімків і копіювання; панель моніторингу за подіями WebSocket; зберігання токенів у secure store | [SRS-FUN-18](./srs.md#srs-fun-18), [SRS-FUN-37](./srs.md#srs-fun-37), [SRS-FUN-38](./srs.md#srs-fun-38), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-40](./srs.md#srs-fun-40), [SRS-FUN-41](./srs.md#srs-fun-41), [SRS-FUN-42](./srs.md#srs-fun-42), [SRS-FUN-45](./srs.md#srs-fun-45), [SRS-NFR-SEC-04](./srs.md#srs-nfr-sec-04), [SRS-NFR-COMP-01](./srs.md#srs-nfr-comp-01), [SRS-NFR-COMP-02](./srs.md#srs-nfr-comp-02), [SRS-NFR-A11Y-01](./srs.md#srs-nfr-a11y-01), [SRS-NFR-A11Y-02](./srs.md#srs-nfr-a11y-02) |
 | Reverse Proxy | Container | Caddy | Термінація TLS 1.2+, проксування REST і WebSocket до Backend API, єдина точка входу на порту 443 | [SRS-NFR-SEC-06](./srs.md#srs-nfr-sec-06) |
 | Backend API | Container | Node.js 22, Express, Socket.io | REST API і канал подій; модулі auth, courses, testing, scheduling, generation, monitoring; RBAC, rate limiting, постановка задач у чергу, ретрансляція подій задач викладачу | [SRS-FUN-01](./srs.md#srs-fun-01)…[SRS-FUN-17](./srs.md#srs-fun-17), [SRS-FUN-19](./srs.md#srs-fun-19)…[SRS-FUN-22](./srs.md#srs-fun-22), [SRS-FUN-50](./srs.md#srs-fun-50)…[SRS-FUN-54](./srs.md#srs-fun-54), [SRS-FUN-28](./srs.md#srs-fun-28)…[SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-34](./srs.md#srs-fun-34)…[SRS-FUN-36](./srs.md#srs-fun-36), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-43](./srs.md#srs-fun-43), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-FUN-46](./srs.md#srs-fun-46)…[SRS-FUN-49](./srs.md#srs-fun-49), [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01), [SRS-NFR-PERF-02](./srs.md#srs-nfr-perf-02), [SRS-NFR-RT-01](./srs.md#srs-nfr-rt-01), [SRS-NFR-ASYNC-01](./srs.md#srs-nfr-async-01), [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01)…[SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03), [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05), [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07), [SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02), [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
-| Generation Worker | Container | Node.js 22, BullMQ | Отримання задач з черги, парсинг PDF, виклик Claude API з розмежуванням даних і інструкцій, валідація за JSON-схемою, перевірка подібності, збереження чернеток, облік вартості | [SRS-FUN-24](./srs.md#srs-fun-24)…[SRS-FUN-27](./srs.md#srs-fun-27), [SRS-FUN-30](./srs.md#srs-fun-30)…[SRS-FUN-33](./srs.md#srs-fun-33), [SRS-NFR-ASYNC-02](./srs.md#srs-nfr-async-02)…[SRS-NFR-ASYNC-04](./srs.md#srs-nfr-async-04), [SRS-NFR-COST-01](./srs.md#srs-nfr-cost-01), [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
+| Generation Worker | Container | Node.js 22, BullMQ | Отримання задач з черги, парсинг PDF, виклик Claude API з розмежуванням даних і інструкцій, валідація за JSON-схемою, перевірка подібності, збереження чернеток, облік вартості; періодичні задачі черги maintenance: завершення прострочених спроб (щохвилини), видалення подій антисписування за строком (щодоби) | [SRS-FUN-24](./srs.md#srs-fun-24)…[SRS-FUN-27](./srs.md#srs-fun-27), [SRS-FUN-30](./srs.md#srs-fun-30)…[SRS-FUN-33](./srs.md#srs-fun-33), [SRS-NFR-ASYNC-02](./srs.md#srs-nfr-async-02)…[SRS-NFR-ASYNC-04](./srs.md#srs-nfr-async-04), [SRS-NFR-COST-01](./srs.md#srs-nfr-cost-01), [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
 | Backup Job | Container | pg_dump, cron | Щоденний дамп PostgreSQL на окремий фізичний носій, зберігання 7 днів | [SRS-NFR-REL-03](./srs.md#srs-nfr-rel-03) |
 | PostgreSQL 16 | Container (Database) | PostgreSQL 16 | Користувачі, курси, контрольні заходи, відповіді, ReviewState, чернетки, журнал дій з контентом, задачі генерації з обліком токенів і вартості (generation_jobs); ACID-транзакції | [SRS-FUN-12](./srs.md#srs-fun-12), [SRS-FUN-16](./srs.md#srs-fun-16), [SRS-FUN-19](./srs.md#srs-fun-19), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
 | Redis 7 | Container (Database) | Redis 7, AOF | Брокер черги BullMQ, стан failed (dead-letter queue), події задач QueueEvents | [SRS-NFR-ASYNC-03](./srs.md#srs-nfr-async-03), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-REL-04](./srs.md#srs-nfr-rel-04) |
@@ -288,7 +288,7 @@ flowchart TB
 | Backend API | Redis 7 | RESP/TCP 6379 | Постановка задач (enqueue BullMQ), підписка на QueueEvents |
 | Backend API | File Storage | Файлова система (volume) | Запис завантажених PDF |
 | Generation Worker | Redis 7 | RESP/TCP 6379 | Отримання задач, публікація стану задач (completed, failed) |
-| Generation Worker | PostgreSQL 16 | SQL/TCP 5432 | Збереження чернеток, стану задачі, токенів і вартості в generation_jobs |
+| Generation Worker | PostgreSQL 16 | SQL/TCP 5432 | Збереження чернеток, стану задачі, токенів і вартості в generation_jobs; завершення прострочених спроб; видалення подій антисписування |
 | Generation Worker | File Storage | Файлова система (volume) | Читання PDF для парсингу |
 | Generation Worker | Claude API | HTTPS (Claude Messages API, JSON) | Генерація контенту |
 | Backend API | SMTP-провайдер | SMTP, порт 587, STARTTLS | Листи підтвердження пошти і відновлення доступу |
@@ -591,6 +591,8 @@ flowchart LR
 | ConsoleMailSender | Outbound | Реалізація IMailSender для середовищ dev і test: лист з посиланням записується в журнал застосунку замість надсилання; адаптер обирається змінною оточення `MAIL_TRANSPORT` (`smtp` або `console`), у production допускається лише `smtp` | pino | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | BullMqJobQueue | Outbound | Постановка задач BullMQ з jobId := idempotency_key, attempts = 3, exponential backoff 5 с, requestId у даних задачі | bullmq, Redis 7 | [SRS-NFR-ASYNC-03](./srs.md#srs-nfr-async-03), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
 
+**Періодичні задачі.** Generation Worker виконує дві повторювані задачі окремої черги `maintenance` (BullMQ Job Scheduler; один запуск на інтервал незалежно від кількості процесів): щохвилини обробник MaintenanceJobHandler вибирає спроби `status = 'in_progress' AND deadline_at < now` (індекс `attempts_in_progress_deadline_idx`) і завершує кожну алгоритмом підрозділу 2.8.1 через AttemptService зі статусом `expired`; щодоби о 03:00 Europe/Kyiv PrivacyService видаляє події антисписування за [SRS-FUN-49](./srs.md#srs-fun-49). Сервіси Core спільні для Backend API і Generation Worker (одна кодова база, підрозділ 2.2.2), тому окремої реалізації логіки завершення спроби немає ([SRS-FUN-15](./srs.md#srs-fun-15), [SRS-FUN-19](./srs.md#srs-fun-19)).
+
 Таблиця 2.8 – Типи зв'язків діаграм компонентів
 
 | Підпис зв'язку | Значення |
@@ -646,7 +648,7 @@ flowchart LR
 | 401 | `/problems/unauthorized`, `/problems/invalid-credentials`, `/problems/refresh-token-reused` | Відсутній або прострочений access-токен; невірна пошта або пароль (без розрізнення причини); повторне використання анульованого refresh-токена |
 | 403 | `/problems/forbidden`, `/problems/email-not-verified` | Роль у курсі не дозволяє дію або ресурс належить іншому курсу; вхід до підтвердження пошти |
 | 404 | `/problems/not-found` | Ресурс не існує або належить іншому студенту того самого курсу |
-| 409 | `/problems/email-taken`, `/problems/version-conflict`, `/problems/attempt-finished`, `/problems/already-member`, `/problems/idempotency-key-in-progress` | Конфлікт зі станом ресурсу, зокрема розбіжність версії питання під час модерації |
+| 409 | `/problems/email-taken`, `/problems/version-conflict`, `/problems/attempt-finished`, `/problems/already-member`, `/problems/idempotency-key-in-progress`, `/problems/attempt-in-progress` | Конфлікт зі станом ресурсу, зокрема розбіжність версії питання під час модерації |
 | 413 | `/problems/payload-too-large` | Файл понад 10 МБ |
 | 415 | `/problems/unsupported-media-type` | Файл не є PDF за MIME-типом або сигнатурою `%PDF` |
 | 422 | `/problems/email-domain-not-allowed`, `/problems/pdf-no-text-layer`, `/problems/pdf-too-long`, `/problems/attempt-expired`, `/problems/option-not-in-question`, `/problems/invite-code-invalid`, `/problems/insufficient-question-pool`, `/problems/idempotency-key-mismatch` | Запит валідний за схемою, але порушує бізнес-правило |
@@ -690,7 +692,7 @@ flowchart LR
         $ref: "#/components/responses/TooManyRequests"
 ```
 
-**Фіксація відповіді і завершення спроби.** `POST /attempts/{attemptId}/answers` фіксує відповідь ідемпотентно за парою (attemptId, questionId): повторне надсилання замінює обрані варіанти без створення нового запису ([SRS-FUN-16](./srs.md#srs-fun-16)). Відповідь 200 не містить ознаки правильності ([SRS-FUN-14](./srs.md#srs-fun-14)); відповідь після `deadlineAt` відхиляється з кодом 422 `attempt-expired` ([SRS-FUN-15](./srs.md#srs-fun-15)), до завершеної спроби — 409 `attempt-finished`. `POST /attempts/{attemptId}/completion` обчислює q для кожної теми і оновлює ReviewState в одній транзакції ([SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01)); повторний запит повертає збережений результат без повторного перерахунку.
+**Початок, фіксація відповіді і завершення спроби.** `POST /attempts` встановлює `deadlineAt` за правилом [SRS-FUN-15](./srs.md#srs-fun-15) і за наявності незавершеної спроби того самого режиму з чинним лімітом часу повертає 409 `attempt-in-progress`; у режимі `daily_plan` план формується повторно, тому `GET /me/daily-plan` є попереднім переглядом. `POST /attempts/{attemptId}/answers` фіксує відповідь ідемпотентно за парою (attemptId, questionId): повторне надсилання замінює обрані варіанти без створення нового запису ([SRS-FUN-16](./srs.md#srs-fun-16)). Відповідь 200 не містить ознаки правильності ([SRS-FUN-14](./srs.md#srs-fun-14)); відповідь після `deadlineAt` відхиляється з кодом 422 `attempt-expired` ([SRS-FUN-15](./srs.md#srs-fun-15)), до завершеної спроби — 409 `attempt-finished`. `POST /attempts/{attemptId}/completion` обчислює q для кожної теми і оновлює ReviewState в одній транзакції ([SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01)); повторний запит повертає збережений результат без повторного перерахунку.
 
 **Автентифікація.** Запити відновлення пароля і повторного листа підтвердження завжди повертають 202, а невірна пошта і невірний пароль при вході дають однакову відповідь 401: відповідь не розкриває існування облікового запису. Refresh-токен передається в тілі `POST /auth/refresh` і `POST /auth/logout`, оскільки мобільний клієнт зберігає токени в expo-secure-store ([SRS-NFR-SEC-04](./srs.md#srs-nfr-sec-04)), а не в cookie браузера; захист refresh-токена забезпечують ротація і виявлення повторного використання ([SRS-NFR-SEC-02](./srs.md#srs-nfr-sec-02)).
 
@@ -854,7 +856,7 @@ erDiagram
         uuid course_id FK
         uuid topic_id FK
         varchar storage_key UK
-        varchar original_name
+        varchar original_name "VARCHAR(255)"
         integer size_bytes "1..10485760"
         smallint page_count "1..60"
         integer text_tokens "1..40000"
@@ -867,7 +869,7 @@ erDiagram
         uuid course_id FK
         uuid control_event_id FK
         varchar storage_key UK
-        varchar original_name
+        varchar original_name "VARCHAR(255)"
         integer size_bytes "1..10485760"
         smallint page_count "1..60"
         integer text_tokens "1..40000"
@@ -1041,11 +1043,12 @@ erDiagram
 | control_event_topics | control_event_id, topic_id, course_id | uuid | PK (control_event_id, topic_id); FK (control_event_id, course_id) → control_events, FK (topic_id, course_id) → topics, CASCADE | Теми заходу лише того самого курсу |
 | lecture_materials | topic_id, course_id | uuid | FK (topic_id, course_id) → topics | Прив'язка до теми ([SRS-FUN-09](./srs.md#srs-fun-09)) |
 | lecture_materials | storage_key | varchar(128) | NOT NULL, UNIQUE | Ключ файлу в File Storage; оригінальна назва файлу в шляху не використовується |
+| lecture_materials | original_name | varchar(255) | NOT NULL | Оригінальна назва файлу для відображення викладачу (`fileName` в API) |
 | lecture_materials | size_bytes, page_count, text_tokens | integer, smallint, integer | CHECK (size_bytes BETWEEN 1 AND 10485760), CHECK (page_count BETWEEN 1 AND 60), CHECK (text_tokens BETWEEN 1 AND 40000) | Обмеження [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07), [SRS-FUN-51](./srs.md#srs-fun-51) |
 | lecture_materials | content_sha256 | bytea | NOT NULL, CHECK (octet_length = 32) | Версія джерела для ключа ідемпотентності |
 | source_tests | control_event_id, course_id | uuid | FK (control_event_id, course_id) → control_events | Зразок належить контрольному заходу ([SRS-FUN-10](./srs.md#srs-fun-10)); доступ лише owner і co-instructor ([SRS-FUN-11](./srs.md#srs-fun-11)) |
 | source_tests | time_limit_minutes | smallint | NOT NULL, CHECK (BETWEEN 1 AND 240) | Ліміт часу зразка для пробного тесту ([SRS-FUN-34](./srs.md#srs-fun-34)) |
-| source_tests | size_bytes, page_count, text_tokens, content_sha256 | — | Як у lecture_materials | — |
+| source_tests | original_name, size_bytes, page_count, text_tokens, content_sha256 | — | Як у lecture_materials | — |
 | source_test_structure | source_test_id, topic_id, question_type | uuid, uuid, question_type | PK зі всіх трьох полів; FK → source_tests CASCADE, topics | Структура зразка «тема × тип» |
 | source_test_structure | question_count | smallint | NOT NULL, CHECK (BETWEEN 1 AND 100) | Кількість питань комбінації |
 | mock_tests | control_event_id | uuid | FK → control_events, UNIQUE | Один опублікований пробний тест на захід ([SRS-FUN-35](./srs.md#srs-fun-35)) |
@@ -1062,7 +1065,7 @@ erDiagram
 | question_options | is_correct | boolean | NOT NULL | Ознака правильності; не передається студенту ([SRS-FUN-14](./srs.md#srs-fun-14)) |
 | attempts | user_id | uuid | FK → users | Власник спроби ([SRS-FUN-54](./srs.md#srs-fun-54)) |
 | attempts | course_id, mode, control_event_id | uuid, attempt_mode, uuid | CHECK ((mode = 'daily_plan') = (course_id IS NULL)); CHECK ((mode = 'mock_test') = (control_event_id IS NOT NULL)) | План на день охоплює кілька курсів; пробний тест прив'язано до заходу |
-| attempts | status, started_at, deadline_at, finished_at | attempt_status, timestamptz | CHECK (deadline_at > started_at); CHECK ((status = 'in_progress') = (finished_at IS NULL)) | Серверний таймер ([SRS-FUN-15](./srs.md#srs-fun-15)) |
+| attempts | status, started_at, deadline_at, finished_at | attempt_status, timestamptz | CHECK (deadline_at > started_at); CHECK ((status = 'in_progress') = (finished_at IS NULL)) | Серверний таймер: `deadline_at := started_at + time_limit_minutes` зразка для mock_test, `started_at + min(2 хв × кількість питань, 60 хв)` для daily_plan і practice ([SRS-FUN-15](./srs.md#srs-fun-15)) |
 | attempt_questions | attempt_id, question_id | uuid | PK; FK → attempts CASCADE, questions | Питання, видані в спробі |
 | attempt_questions | position, option_order | smallint, smallint[] | UNIQUE (attempt_id, position); option_order NOT NULL | Збережений рандомізований порядок питань і варіантів ([SRS-FUN-13](./srs.md#srs-fun-13)) |
 | answers | attempt_id, question_id | uuid | FK (attempt_id, question_id) → attempt_questions; UNIQUE (attempt_id, question_id); UNIQUE (id, question_id) | Ідемпотентна відповідь ([SRS-FUN-16](./srs.md#srs-fun-16)) |
@@ -1108,7 +1111,7 @@ erDiagram
 | questions_course_draft_idx | questions (course_id, created_at) WHERE status = 'draft' | Частковий | Черга модерації з пагінацією | [SRS-FUN-28](./srs.md#srs-fun-28) |
 | questions_job_position_key | questions (generation_job_id, position) | UNIQUE | Захист від дублікатів чернеток | [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02) |
 | attempts_user_started_idx | attempts (user_id, started_at DESC) | — | Історія спроб і попередня спроба студента | [SRS-FUN-50](./srs.md#srs-fun-50), [SRS-FUN-54](./srs.md#srs-fun-54) |
-| attempts_in_progress_deadline_idx | attempts (deadline_at) WHERE status = 'in_progress' | Частковий | Завершення прострочених спроб за серверним таймером | [SRS-FUN-15](./srs.md#srs-fun-15) |
+| attempts_in_progress_deadline_idx | attempts (deadline_at) WHERE status = 'in_progress' | Частковий | Завершення прострочених спроб задачею maintenance (підрозділ 2.3.2) | [SRS-FUN-15](./srs.md#srs-fun-15) |
 | answers_attempt_question_key | answers (attempt_id, question_id) | UNIQUE | Ідемпотентна фіксація відповіді | [SRS-FUN-16](./srs.md#srs-fun-16) |
 | answers_question_idx | answers (question_id) | — | Засвоєння «студент × тема», питання з неправильними відповідями | [SRS-FUN-46](./srs.md#srs-fun-46), [SRS-FUN-50](./srs.md#srs-fun-50) |
 | review_states_user_next_idx | review_states (user_id, next_review) | — | Відбір тем-кандидатів плану на день | [SRS-FUN-20](./srs.md#srs-fun-20), [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01) |
@@ -1145,18 +1148,18 @@ erDiagram
 1. `BEGIN`; `A := SELECT … FROM attempts WHERE id = attemptId AND user_id = userId FOR UPDATE`.
 2. Якщо `A = NULL` — `ROLLBACK`, відповідь 404; кінець.
 3. Якщо `A.status ≠ 'in_progress'` — `ROLLBACK`, відповідь — збережений `Result` (повторне завершення не змінює ReviewState); кінець.
-4. `today := Date(now, Europe/Kyiv)`; `T := {x.topic_id : x ∈ attempt_questions(A)}`; `n := |T|`. Якщо `n = 0` — `ROLLBACK`, відповідь 500 (порушення інваріанта «спроба містить ≥ 1 питання»); кінець.
+4. `today := Date(now, Europe/Kyiv)`; `T := {q.topic_id : q ∈ questions ⋈ attempt_questions(A)}`; `n := |T|`. Якщо `n = 0` — `ROLLBACK`, відповідь 500 (порушення інваріанта «спроба містить ≥ 1 питання»); кінець.
 5. Для `i := 1, …, n`:
-   1. `Q[i] := {x ∈ attempt_questions(A) : x.topic_id = T[i]}`; `total := |Q[i]|`; `correct := |{x ∈ Q[i] : x.is_correct = TRUE}|` (питання без відповіді — неправильні); `p := correct / total` (`total ≥ 1` за побудовою `T`).
+   1. `Q[i] := attempt_questions(A) ⋈ questions LEFT JOIN answers ON (attempt_id, question_id)`, відібрані за `topic_id = T[i]`; `total := |Q[i]|`; `correct := |{x ∈ Q[i] : Coalesce(x.is_correct, FALSE) = TRUE}|` (питання без відповіді — неправильні); `p := correct / total` (`total ≥ 1` за побудовою `T`).
    2. `q := Quality(p)` за табл. А.1: `p ≥ 0,9 → 5`; `0,75 ≤ p < 0,9 → 4`; `0,6 ≤ p < 0,75 → 3`; `0,4 ≤ p < 0,6 → 2`; `0 < p < 0,4 → 1`; `p = 0 → 0`.
-   3. `R := SELECT … FROM review_states WHERE user_id = userId AND topic_id = T[i] FOR UPDATE`; якщо `R = NULL` — `R.ef := 2,50`, `R.interval := 0`, `R.repetitions := 0`.
-   4. Якщо `q ≥ 3`: `R.interval := 1` при `R.repetitions = 0`; `R.interval := 6` при `R.repetitions = 1`; інакше `R.interval := ⌈R.interval × R.ef⌉` (EF до оновлення). Далі `R.repetitions := R.repetitions + 1`; `R.ef := Round(R.ef + 0,1 − (5 − q) × (0,08 + (5 − q) × 0,02), 2)`; якщо `R.ef < 1,30` — `R.ef := 1,30`.
-   5. Якщо `q < 3`: `R.repetitions := 0`; `R.interval := 1`; `R.ef` не змінюється.
-   6. `R.next_review := today + R.interval`; `R.last_quality := q`; `UPSERT review_states`; `Result[i] := (T[i], correct, total, q, R.ef, R.interval, R.repetitions, R.next_review)`.
+   3. `R := SELECT … FROM review_states WHERE user_id = userId AND topic_id = T[i] FOR UPDATE`; якщо `R = NULL` — `R.ef := 2,50`, `R.interval_days := 0`, `R.repetitions := 0`.
+   4. Якщо `q ≥ 3`: `R.interval_days := 1` при `R.repetitions = 0`; `R.interval_days := 6` при `R.repetitions = 1`; інакше `R.interval_days := ⌈R.interval_days × R.ef⌉` (EF до оновлення). Далі `R.repetitions := R.repetitions + 1`; `R.ef := Round(R.ef + 0,1 − (5 − q) × (0,08 + (5 − q) × 0,02), 2)`; якщо `R.ef < 1,30` — `R.ef := 1,30`.
+   5. Якщо `q < 3`: `R.repetitions := 0`; `R.interval_days := 1`; `R.ef` не змінюється.
+   6. `R.next_review := today + R.interval_days`; `R.last_quality := q`; `UPSERT review_states`; `Result[i] := (T[i], correct, total, q, R.ef, R.interval_days, R.repetitions, R.next_review)`.
 6. Якщо `now ≤ A.deadline_at` — `A.status := 'finished'`, інакше `A.status := 'expired'`; `A.finished_at := now`; `COMMIT`.
 7. Якщо `COMMIT` завершився помилкою (PostgreSQL недоступний, конфлікт серіалізації) — відповідь 503 з `Retry-After`; стан не змінено. Інакше — відповідь 200 з `Result`; кінець.
 
-Цикл кроку 5 обмежено `n ≤ 100` (кількість питань спроби). Блокування рядка спроби `FOR UPDATE` і перевірка статусу на кроці 3 гарантують одне оновлення ReviewState на спробу за паралельних запитів завершення.
+Цикл кроку 5 обмежено `n ≤ 100` (кількість питань спроби). Той самий алгоритм виконує задача maintenance для спроб з `deadline_at < now` (підрозділ 2.3.2): `userId := A.user_id`, крок 6 встановлює `A.status := 'expired'`. Блокування рядка спроби `FOR UPDATE` і перевірка статусу на кроці 3 гарантують одне оновлення ReviewState на спробу за паралельних запитів завершення.
 
 ```mermaid
 flowchart TD
@@ -1170,21 +1173,21 @@ flowchart TD
     init --> c0{"n = 0"}
     c0 -- так --> o500[/"ROLLBACK; відповідь 500"/] --> f
     c0 -- ні --> loop{{"i := 1, …, n"}}
-    loop -- "i ≤ n" --> cnt["total := |Q[i]|; correct := |{x ∈ Q[i] : x.is_correct = TRUE}|<br/>p := correct / total"]
+    loop -- "i ≤ n" --> cnt["Q[i] := питання спроби теми T[i] LEFT JOIN answers<br/>total := |Q[i]|; correct := |{x ∈ Q[i] : Coalesce(x.is_correct, FALSE) = TRUE}|<br/>p := correct / total"]
     cnt --> qf[["q := Quality(p) за табл. А.1"]]
     qf --> rs["R := SELECT review_states<br/>WHERE user_id = userId AND topic_id = T[i] FOR UPDATE"]
     rs --> c3{"R = NULL"}
-    c3 -- так --> rinit["R.ef := 2,50; R.interval := 0; R.repetitions := 0"] --> c4
+    c3 -- так --> rinit["R.ef := 2,50; R.interval_days := 0; R.repetitions := 0"] --> c4
     c3 -- ні --> c4{"q ≥ 3"}
-    c4 -- ні --> lapse["R.repetitions := 0; R.interval := 1"] --> nr
+    c4 -- ні --> lapse["R.repetitions := 0; R.interval_days := 1"] --> nr
     c4 -- так --> c5{"R.repetitions = 0"}
-    c5 -- так --> i1["R.interval := 1"] --> upd
+    c5 -- так --> i1["R.interval_days := 1"] --> upd
     c5 -- ні --> c6{"R.repetitions = 1"}
-    c6 -- так --> i6["R.interval := 6"] --> upd
-    c6 -- ні --> imul["R.interval := ⌈R.interval × R.ef⌉"] --> upd
+    c6 -- так --> i6["R.interval_days := 6"] --> upd
+    c6 -- ні --> imul["R.interval_days := ⌈R.interval_days × R.ef⌉"] --> upd
     upd["R.repetitions := R.repetitions + 1<br/>R.ef := Round(R.ef + 0,1 − (5 − q) × (0,08 + (5 − q) × 0,02), 2)"] --> c7{"R.ef #lt; 1,30"}
     c7 -- так --> efmin["R.ef := 1,30"] --> nr
-    c7 -- ні --> nr["R.next_review := today + R.interval; R.last_quality := q<br/>UPSERT review_states; Result[i] := (T[i], correct, total, q, R)"]
+    c7 -- ні --> nr["R.next_review := today + R.interval_days; R.last_quality := q<br/>UPSERT review_states; Result[i] := (T[i], correct, total, q, R)"]
     nr -- "i := i + 1" --> loop
     loop -- "цикл завершено" --> c8{"now ≤ A.deadline_at"}
     c8 -- так --> stF["A.status := 'finished'"] --> commit
@@ -1252,19 +1255,19 @@ flowchart TD
 1. `BEGIN`; `G := SELECT … FROM generation_jobs WHERE id = Job.generationJobId FOR UPDATE`. Якщо `G = NULL OR G.status ∈ {'done', 'dead'}` — `COMMIT`, задачу підтверджено без обробки (повторна доставка); кінець.
 2. `G.status := 'processing'`; `G.attempts_made := Job.attemptsMade + 1`; `G.started_at := Coalesce(G.started_at, now)`; `COMMIT`.
 3. `Spent := Σ cost_usd FROM generation_jobs WHERE created_at ≥ 00:00 UTC поточної доби`; `Est := (TokensIn × 0,10 + MaxTokens × 0,50) / 10^6`. Якщо `Spent + Est > DailyBudget` — `Reason := 'budget-exceeded'`, перехід до кроку 12.
-4. `Text := текстовий шар джерела G` (`lecture_materials` при `G.type = 'lecture_test'`, `source_tests` при `G.type = 'mock_questions'`). Якщо `Text = NULL OR |Text| = 0` — `Reason := 'source-empty'`, перехід до кроку 12.
+4. `Src := lecture_materials` при `G.type = 'lecture_test'`, `Src := source_tests` при `G.type = 'mock_questions'`; `Text := ExtractText(File(Src.storage_key))` (pdfjs-dist, читання з File Storage); `Text := NULL`, якщо файл відсутній. Якщо `Text = NULL OR |Text| = 0` — `Reason := 'source-empty'`, перехід до кроку 12.
 5. `Prompt := (системні інструкції; Text у розмежованому блоці документа з інструкцією не виконувати команди з нього; JSON-схема типу G.type)`.
 6. `(Resp, Err) := Claude.messages.create(model := 'claude-haiku-5-5', max_tokens := MaxTokens, timeout := Timeout, maxRetries := 0)`.
 7. Якщо `Err ≠ NULL`: якщо `Err.status ∈ {400, 401, 403}` — `Reason := 'llm-rejected'`, перехід до кроку 12; якщо `Err.status = 429` — `Delay := max(BaseDelay × 2^(G.attempts_made − 1), Err.retryAfter)`, `Reason := 'rate-limited'`, перехід до кроку 11; інакше (5xx, тайм-аут, мережева помилка) — `Delay := BaseDelay × 2^(G.attempts_made − 1)`, `Reason := Err.kind`, перехід до кроку 11.
 8. `G.tokens_in := G.tokens_in + Resp.usage.input_tokens`; `G.tokens_out := G.tokens_out + Resp.usage.output_tokens`; `G.cost_usd := G.cost_usd + Cost(Resp.usage)`; `G.model := Resp.model`; `UPDATE generation_jobs`. Облік виконується для кожного виклику, у тому числі з невалідним результатом.
-9. Якщо `Resp.stop_reason = 'max_tokens' OR |Resp.content| = 0` — `Reason := 'empty-or-truncated'`; інакше `Items := JSON.parse(Resp.content)`, і якщо розбір завершився помилкою `OR NOT Valid(Items, Schema[G.type])` — `Reason := 'invalid-json'`. У цих випадках `Delay := BaseDelay × 2^(G.attempts_made − 1)`, перехід до кроку 11.
-10. Якщо `G.type = 'mock_questions'` — `Kept := JaccardFilter(Items, SrcQ, 0,5)`, інакше `Kept := Items`. Якщо `|Kept| = 0` — `Reason := 'all-variants-similar'`, `Delay := BaseDelay × 2^(G.attempts_made − 1)`, перехід до кроку 11. Інакше: `BEGIN`; для `i := 1, …, |Kept|` — `INSERT INTO questions (…, status := 'draft', generation_job_id := G.id, position := i) ON CONFLICT (generation_job_id, position) DO NOTHING`; `G.status := 'done'`; `G.drafts_count := |Kept|`; `G.finished_at := now`; `COMMIT`; подія `generation.done` у кімнату `user:{G.requested_by}`; кінець.
+9. Якщо `Resp.stop_reason = 'max_tokens' OR |Resp.content| = 0` — `Reason := 'empty-or-truncated'`; інакше `Items := JSON.parse(Resp.content)`, і якщо розбір завершився помилкою `OR NOT Valid(Items, Schema[G.type])` — `Reason := 'invalid-json'`. Схема `mock_questions`: `sourceQuestions[1…N]` — формулювання питань зразка, вилучені моделлю з розмежованого блоку документа, і `variants[1…M]` з `sourceIndex ∈ [1, N]`, по 2…3 варіанти на кожне питання зразка ([SRS-FUN-31](./srs.md#srs-fun-31)). У цих випадках `Delay := BaseDelay × 2^(G.attempts_made − 1)`, перехід до кроку 11.
+10. Якщо `G.type = 'mock_questions'` — `SrcQ := Items.sourceQuestions`, `Kept := JaccardFilter(Items.variants, SrcQ, 0,5)` (формулювання зразка не зберігаються в БД і не повертаються через API, [SRS-FUN-11](./srs.md#srs-fun-11)), інакше `Kept := Items`. Якщо `|Kept| = 0` — `Reason := 'all-variants-similar'`, `Delay := BaseDelay × 2^(G.attempts_made − 1)`, перехід до кроку 11. Інакше: `BEGIN`; для `i := 1, …, |Kept|` — `INSERT INTO questions (…, status := 'draft', generation_job_id := G.id, position := i) ON CONFLICT (generation_job_id, position) DO NOTHING`; `G.status := 'done'`; `G.drafts_count := |Kept|`; `G.finished_at := now`; `COMMIT`; подія `generation.done` у кімнату `user:{G.requested_by}`; кінець.
 11. Повторювана помилка. Якщо `G.attempts_made ≥ MaxAttempts` — перехід до кроку 12. Інакше `G.status := 'failed'`; `G.error := Reason`; BullMQ повторює задачу через `Delay` (5 с після першої спроби, 10 с після другої); кінець.
 12. Неповторювана помилка або вичерпано спроби: `G.status := 'dead'`; `G.error := Reason`; `G.finished_at := now`; `UnrecoverableError` (задача залишається в стані failed BullMQ — dead-letter queue); подія `generation.dead` у кімнату `user:{G.requested_by}`; кінець.
 
 Помилка PostgreSQL на будь-якому кроці обробляється як повторювана з `Reason := 'db-unavailable'` (крок 11): результат виклику Claude API за цієї спроби не зберігається, повтор виконується з тим самим `G.id`, а обмеження UNIQUE (generation_job_id, position) виключає дублікати чернеток при повторній доставці.
 
-Підпрограма `JaccardFilter(Items, SrcQ, θ)`: `Norm(s)` — рядок у нижньому регістрі без розділових знаків; `Tri(s)` — множина триграм слів `Norm(s)`; для `|Words(a)| ≥ 3 AND |Words(b)| ≥ 3`: `J(a, b) := |Tri(a) ∩ Tri(b)| / |Tri(a) ∪ Tri(b)|`; інакше `J(a, b) := 1`, якщо `Norm(a) = Norm(b)`, і `J(a, b) := 0` в іншому разі. Для `i := 1, …, |Items|` і `j := 1, …, |SrcQ|` обчислюється `J(Items[i].stem, SrcQ[j].stem)`; `Items[i]` входить до `Kept`, якщо `max_j J ≤ θ`. Знаменник `|Tri(a) ∪ Tri(b)| ≥ 1` за умови `|Words(a)| ≥ 3`.
+Підпрограма `JaccardFilter(Items, SrcQ, θ)`: `Norm(s)` — рядок у нижньому регістрі без розділових знаків; `Tri(s)` — множина триграм слів `Norm(s)`; для `|Words(a)| ≥ 3 AND |Words(b)| ≥ 3`: `J(a, b) := |Tri(a) ∩ Tri(b)| / |Tri(a) ∪ Tri(b)|`; інакше `J(a, b) := 1`, якщо `Norm(a) = Norm(b)`, і `J(a, b) := 0` в іншому разі. Для `i := 1, …, |Items|` і `j := 1, …, |SrcQ|` обчислюється `J(Items[i].stem, SrcQ[j])`; `Items[i]` входить до `Kept`, якщо `max_j J ≤ θ`. Знаменник `|Tri(a) ∪ Tri(b)| ≥ 1` за умови `|Words(a)| ≥ 3`.
 
 ```mermaid
 flowchart TD
@@ -1276,7 +1279,7 @@ flowchart TD
     p1 --> p2["Spent := Σ cost_usd задач поточної доби UTC<br/>Est := (TokensIn × 0,10 + MaxTokens × 0,50) / 10^6"]
     p2 --> c2{"Spent + Est > DailyBudget"}
     c2 -- так --> rb["Reason := 'budget-exceeded'"] --> dead
-    c2 -- ні --> p3["Text := текстовий шар джерела G"]
+    c2 -- ні --> p3["Text := ExtractText(File(Src.storage_key))"]
     p3 --> c3{"Text = NULL OR |Text| = 0"}
     c3 -- так --> re["Reason := 'source-empty'"] --> dead
     c3 -- ні --> p4["Prompt := (інструкції; Text у розмежованому блоці;<br/>JSON-схема G.type)"]
@@ -1294,7 +1297,7 @@ flowchart TD
     parse --> c8{"помилка розбору OR<br/>NOT Valid(Items, Schema[G.type])"}
     c8 -- так --> rj["Reason := 'invalid-json'"] --> dstd
     c8 -- ні --> c9{"G.type = 'mock_questions'"}
-    c9 -- так --> jac[["Kept := JaccardFilter(Items, SrcQ, 0,5)"]] --> c10
+    c9 -- так --> jac[["SrcQ := Items.sourceQuestions<br/>Kept := JaccardFilter(Items.variants, SrcQ, 0,5)"]] --> c10
     c9 -- ні --> kall["Kept := Items"] --> c10
     c10{"|Kept| = 0"}
     c10 -- так --> rs["Reason := 'all-variants-similar'"] --> dstd
@@ -1310,5 +1313,28 @@ flowchart TD
 Рисунок 2.8 – Блок-схема алгоритму обробки задачі генерації worker-процесом
 
 ## 2.9. Інтеграційний аудит та висновок про готовність архітектури
+
+Схему даних (підрозділ 2.7), контракт API (підрозділ 2.5) і алгоритми (підрозділ 2.8) звірено двома способами: скриптом, що порівнює ENUM-типи, типи і межі полів, атрибути алгоритмів і трасування SRS-FUN між `2_design.md`, `api/openapi.yaml` і `srs.md`, та наскрізним аудитом за промптом «Data & Logic Gatekeeper» методички. Протокол аудиту і рішення автора щодо зауважень I-01…I-11 — [17-AI Insights.md](./17-AI%20Insights.md), Запис 20. Результати наведено в табл. 2.15.
+
+Таблиця 2.15 – Звіт про готовність специфікацій до реалізації (Production Readiness Report)
+
+| Перевірка | Результат | Виправлення |
+|---|---|---|
+| ENUM-типи ERD ↔ enum OpenAPI | 10 з 10 типів, опублікованих в API, збігаються за складом і порядком значень; `audit_action`, `audit_entity` — внутрішні | Не потрібне |
+| Типи полів API ↔ колонки ERD (16 схем відповідей) | UUID ↔ `uuid`, `date-time` ↔ `timestamptz`, `date` ↔ `date`, `integer` ↔ `integer`/`smallint`, `number` ↔ `numeric`; `fileName` (≤ 255) зберігався в `original_name` без довжини | I-01: `original_name varchar(255) NOT NULL` у `lecture_materials` і `source_tests` |
+| Межі значень API ↔ CHECK і SRS (21 перевірка) | Збіг: q 0…5, EF ≥ 1,30, `limit` ≤ 100, PDF ≤ 10 485 760 байт, ≤ 60 сторінок, ≤ 40 000 токенів, пароль 10…128, пошта ≤ 254, план ≤ 30 питань, 2…8 на тему, ≤ 15 тем | Не потрібне |
+| Атрибути алгоритмів ↔ ERD | `R.interval` замість `interval_days`; `is_correct` читався з `attempt_questions` | I-04: `R.interval_days`; I-05: `LEFT JOIN answers`, `Coalesce(is_correct, FALSE)` |
+| Джерела даних алгоритму генерації | Текст PDF не зберігається в БД; множину питань зразка `SrcQ` не визначено (блокер) | I-06: `ExtractText(File(storage_key))`; I-07: `sourceQuestions[]` і `variants[]` у JSON-схемі `mock_questions`, без збереження в БД ([SRS-FUN-32](./srs.md#srs-fun-32)) |
+| Життєвий цикл спроби | Ліміт часу для `daily_plan` і `practice` не визначено; механізму завершення прострочених спроб немає (блокери) | I-02: 2 хв на питання, ≤ 60 хв ([SRS-FUN-15](./srs.md#srs-fun-15)); I-03: задача `maintenance` щохвилини (підрозділ 2.3.2), 409 `attempt-in-progress` |
+| План на день ↔ спроба `daily_plan` | `GET /me/daily-plan` і `POST /attempts` могли видати різні набори питань | I-08: `GET` — попередній перегляд, `POST` формує план повторно |
+| Адресація подій Socket.io | Спроба `daily_plan` не має курсу, кімнату події прогресу не визначено | I-09: кімната курсу питання ([SRS-FUN-43](./srs.md#srs-fun-43)) |
+| Облік добового бюджету | BudgetGuard агрегує вартість за `created_at` задачі; похибка на межі доби ≤ 0,024 USD | I-10 відхилено: похибка обмежена вартістю однієї задачі, індекс `generation_jobs (created_at)` уже передбачено |
+| Терміни ролей | «co-instructor» у прозі SRS, `co_instructor` в ENUM | I-11: відповідність у таблиці акторів SRS |
+| Трасування SRS-FUN | 55 вимог: 40 мають операцію REST (`x-srs`), SRS-FUN-23 — Won't (MVP); 14 реалізуються мобільним клієнтом (SRS-FUN-18, 40, 42, 45), Socket.io (SRS-FUN-30, 44), Generation Worker (SRS-FUN-24…27, 31, 32), схемою даних (SRS-FUN-33) і задачею `maintenance` (SRS-FUN-49) | Не потрібне |
+| Валідність контракту | `redocly lint` (recommended): 0 помилок, 0 попереджень | Не потрібне |
+| Діаграми Mermaid | 8 діаграм підрозділів 2.2, 2.3, 2.7, 2.8 компілюються mermaid-cli | Не потрібне |
+| Відносні посилання документації | 0 недійсних посилань і якорів `srs-fun-NN` | Не потрібне |
+
+Повторна звірка після виправлень: 107 перевірок без розбіжностей, 0 розбіжностей. Блокерів (I-02, I-03, I-07) не залишилося: специфікації схеми даних, контракту API і алгоритмів узгоджені й достатні для реалізації в Розділі 3. Залишкові ризики, прийняті рішеннями: Redis як єдина точка відмови черги і доставка задач at-least-once (ADR-001, підрозділ 2.1.1; дублікати чернеток виключає обмеження UNIQUE (generation_job_id, position)), а також похибка обліку бюджету на межі доби (I-10).
 
 ## Висновки до розділу 2
