@@ -22,6 +22,7 @@
 > | 15 | ЛР5 | Незалежний аудит і рішення автора |
 > | 16 | ЛР6 | Рішення автора перед ЛР6 і закриття залишків аудиту |
 > | 17 | ЛР6 | ERD: аудит шару даних (Data Layer Reviewer) |
+> | 18 | ЛР6 | OpenAPI: аудит контракту REST API (API Reviewer) |
 
 
 ## Запис 1 — Валідація першої теми Retain (15.09.2026)
@@ -1838,7 +1839,7 @@
 | D-03. Тема заходу з іншого курсу | Прийнято | Складені FK з `course_id` у `control_event_topics`, `lecture_materials`, `questions`, `source_tests` |
 | D-04. Відповідь поза спробою, чужий варіант | Прийнято | FK `answers (attempt_id, question_id)` → `attempt_questions`; складені FK у `answer_options` |
 | D-05. `revoked boolean`, дублікати підтверджень | Прийнято | `invite_codes.revoked_at`; PK (user_id, topic_id) у `mastery_confirmations` |
-| R-01. varchar замість ENUM | Прийнято | 13 ENUM-типів (табл. 2.9) |
+| R-01. varchar замість ENUM | Прийнято | 13 ENUM-типів (табл. 2.11) |
 | R-02. `control_event_id` не залежить від `mode` | Прийнято | CHECK для `mode`, `control_event_id`, `course_id` |
 | R-03. `replaced_by` без FK | Прийнято | FK на `refresh_tokens(id)` |
 | R-04. Задача без курсу та ініціатора | Прийнято | `course_id`, `requested_by`, часові мітки |
@@ -1846,7 +1847,7 @@
 | R-06. Поведінка FK при видаленні | Прийнято | RESTRICT за замовчуванням, CASCADE для дочірніх записів, знеособлення користувача |
 | R-07. Немає автора | Прийнято | `uploaded_by`, `created_by`, `approved_by`, `published_by` |
 | T-01…T-04. Типи і CHECK | Прийнято | NUMERIC, citext, bytea з CHECK довжини, smallint, CHECK діапазонів |
-| T-05. Індекси | Прийнято | План з 23 індексів (табл. 2.11) |
+| T-05. Індекси | Прийнято | План з 23 індексів (табл. 2.13) |
 | T-06. UUIDv7 | Відхилено | Залишено `gen_random_uuid()`; перехід на `uuidv7()` у PostgreSQL 18 — напрям розвитку |
 | T-07. GIN для `meta` | Відхилено | Індекс не створюється |
 | G-01…G-07, G-09. Технічні поля | Прийнято | `created_at`, `updated_at`, `deleted_at`, `version`, `client_event_id`, `option_order`, `generation_no`, `model`, ENUM для журналу, часткові UNIQUE, `email_verified_at` |
@@ -1854,7 +1855,203 @@
 
 ### Фінальна версія
 
-ERD, специфікацію таблиць і план індексів наведено в підрозділі 2.7 [2_design.md](2_design.md) (рис. 2.5, табл. 2.9–2.11). Коміт «docs: model chapter 2 data layer as PostgreSQL ERD». Після доповнення автора (Запис 16) таблицю `email_tokens` розділено на `email_verification_tokens` і `password_reset_tokens`, ENUM `email_token_purpose` вилучено: схема містить 25 таблиць, 12 ENUM-типів і 24 індекси плану.
+ERD, специфікацію таблиць і план індексів наведено в підрозділі 2.7 [2_design.md](2_design.md) (рис. 2.5, табл. 2.11–2.13). Коміт «docs: model chapter 2 data layer as PostgreSQL ERD». Після доповнення автора (Запис 16) таблицю `email_tokens` розділено на `email_verification_tokens` і `password_reset_tokens`, ENUM `email_token_purpose` вилучено: схема містить 25 таблиць, 12 ENUM-типів і 24 індекси плану.
+
+## Запис 18 — OpenAPI: аудит контракту REST API (24.11.2026)
+
+**Інструмент:** Claude (Anthropic), сесія Claude Code в репозиторії проєкту. **Дата:** 24.11.2026. **Етап:** ЛР6, Завдання 2.
+
+> **Розподіл ролей.** Автор визначив вимоги, обмеження проєкту та архітектурні рішення,
+> ухвалив рішення щодо кожного зауваження аудитора і затвердив фінальну версію.
+> Claude (Anthropic) за інструкціями автора сформував чернетку артефакту, виконав аудит
+> за промптом методички та вніс затверджені автором правки.
+
+### Внесок автора
+
+- Визначив обсяг і правила контракту: OpenAPI 3.0.3 з усіма маршрутами MVP (автентифікація, курси, коди запрошення, теми, контрольні заходи, матеріали multipart з обмеженням розміру, зразки тестів, план на день, спроби, відповіді, завершення з SM-2, події антисписування, пробні тести, задачі генерації з 202 і `Location`, модерація чернеток з пагінацією, теплова карта, учасники, підтвердження засвоєння); `bearerAuth` JWT на всіх змінних операціях; enum = ENUM-типи ERD; `application/problem+json` за RFC 9457 з прикладами; `limit` ≤ 100; заборона токенів і паролів у query; лише UUID в ідентифікаторах шляху; `Idempotency-Key` для постановки задачі генерації; перевірка `redocly lint` до 0 помилок.
+- Доповнив контракт маршрутами входу за корпоративною поштою: `POST /auth/verify-email`, `POST /auth/password-reset/request` (202), `POST /auth/password-reset/confirm`; `email` — `format: email`, `maxLength: 254`.
+- На кроці [СТОП] прийняв 18 зауважень аудитора повністю, A-06 — частково (шлях `/answers` прийнято, перехід на `PUT …/answers/{questionId}` відхилено), S-04 (refresh-токен у cookie HttpOnly) відхилив; аргументи наведено в таблиці рішень.
+
+### Вхідні дані
+
+- [srs.md](srs.md) (SRS-FUN-01…SRS-FUN-55, SRS-NFR-SEC, SRS-NFR-ASYNC, SRS-NFR-COST), ENUM-типи ERD ([2_design.md](2_design.md), табл. 2.11), рішення автора із Записів 16 і 17.
+- Результат `npx @redocly/cli lint` (recommended, версія 2.82.0) для першої версії: 4 помилки, 7 попереджень.
+
+> [!quote]- Використаний промпт (розгорнути)
+> Роль: Principal API Architect, Lead Integration Engineer та експерт із суворого аудиту інтерфейсів (OpenAPI / gRPC Best Practices).
+> Контекст: Я студент 4 курсу спеціальності 121/F2 «Інженерія ПЗ». Я написав базовий стартовий каркас інтерфейсного контракту для взаємодії сервісів у своєму проєкті. Мені потрібен твій жорсткий інженерний аудит, пошук синтаксичних/архітектурних помилок та критика відповідності Best Practices індустрії.
+> Обраний мною інструмент контракту: OpenAPI v3 (YAML)
+> Мій написаний початковий код контракту: (наведено нижче в блоці «Перша версія артефакту»)
+> Твоє завдання: Проведи глибокий аналітичний аудит мого контракту (openapi.yaml або service.proto) на повноцінне покриття критичного бізнес-сценарію мого проєкту (включаючи повні схеми запитів, відповідей та обробки помилок). Видай звіт українською мовою у форматі суворого API Review за наступними пунктами:
+> 1. Валідація синтаксису та структури: Перевір код на наявність структурних помилок (відступи у YAML, правильність нумерації тегів у gRPC message). Покажи, де допущено неточності.
+> 2. Аудит відповідності RESTful / gRPC Best Practices:
+> • Для OpenAPI: Чи правильно використано HTTP-методи та статус-коди? Розкритикуй використання POST там, де має бути GET або PUT. Перевір іменування шляхів (чи використано множину іменників, наприклад /resumes замість /get_all_resume).
+> • Для gRPC: Перевір іменування методів та повідомлень на відповідність Google API Style Guide.
+> 3. Аналіз обробки помилок та Edge Cases: Розкритикуй контракт за відсутність опису негативних сценаріїв. Вкажи, які саме коди помилок (наприклад, 400 Bad Request із валідацією полів, 401 Unauthorized, 429 Too Many Requests для Rate Limiting або відповідні gRPC статуси INVALID_ARGUMENT, UNAUTHENTICATED) мають бути обов'язково задокументовані.
+> 4. Аудит безпеки та схем даних (Security Schema): Чи містить мій контракт опис механізмів авторизації? (наприклад, визначення securitySchemes для JWT Bearer токенів в OpenAPI).
+> Стиль: Сухий контрактний стиль. Повна відсутність розмовної мови, оціночних суджень та «води».
+
+> [!example]- Перша версія артефакту — каркас на 3 операції (розгорнути)
+> ```yaml
+> openapi: 3.0.3
+> info:
+>   title: Recall API
+>   version: 0.1.0
+> paths:
+>   /api/v1/auth/login:
+>     post:
+>       summary: Вхід користувача
+>       requestBody:
+>         content:
+>           application/json:
+>             schema:
+>               type: object
+>               properties:
+>                 email:
+>                   type: string
+>                 password:
+>                   type: string
+>       responses:
+>         '200':
+>           description: Токени
+>           content:
+>             application/json:
+>               schema:
+>                 type: object
+>                 properties:
+>                   accessToken:
+>                     type: string
+>                   refreshToken:
+>                     type: string
+>   /api/v1/generateTest:
+>     post:
+>       summary: Генерація тесту за лекцією
+>       requestBody:
+>         content:
+>           application/json:
+>             schema:
+>               type: object
+>               properties:
+>                 materialId:
+>                   type: string
+>                 userId:
+>                   type: string
+>       responses:
+>         '200':
+>           description: Згенерований тест
+>           content:
+>             application/json:
+>               schema:
+>                 type: object
+>                 properties:
+>                   questions:
+>                     type: array
+>                     items:
+>                       type: object
+>   /api/v1/attempts/{id}/answer:
+>     post:
+>       summary: Відповідь на питання
+>       parameters:
+>         - name: id
+>           in: path
+>           required: true
+>           schema:
+>             type: string
+>         - name: token
+>           in: query
+>           schema:
+>             type: string
+>       requestBody:
+>         content:
+>           application/json:
+>             schema:
+>               type: object
+>               properties:
+>                 questionId:
+>                   type: string
+>                 optionIds:
+>                   type: array
+>                   items:
+>                     type: string
+>       responses:
+>         '200':
+>           description: Відповідь прийнято
+>           content:
+>             application/json:
+>               schema:
+>                 type: object
+>                 properties:
+>                   correct:
+>                     type: boolean
+>                   quality:
+>                     type: integer
+> ```
+
+> [!abstract]- Повний звіт аудитора (розгорнути)
+> **API Review: openapi.yaml Recall, версія 0.1.0 (каркас із 3 операцій)**
+>
+> Інструментальна перевірка: `npx @redocly/cli lint` (recommended, версія 2.82.0) — 4 помилки (security-defined × 3, no-empty-servers × 1), 7 попереджень (operation-operationId × 3, operation-4xx-response × 3, info-license × 1).
+>
+> **1. Валідація синтаксису та структури**
+>
+> - A-01. Відсутній блок `servers`; операції не мають `operationId` — генерація серверних стабів і клієнтського SDK дає непередбачувані імена методів; відсутні `info.description`, `info.license`, `tags`.
+> - A-02. `requestBody` без `required: true`; схеми без `required`, без `additionalProperties: false` — порожнє тіло і довільні додаткові поля проходять валідацію (Mass Assignment). Усі схеми вбудовані в операції: повторне використання через `components/schemas` відсутнє.
+> - A-03. Параметр шляху `id` має тип `string` без `format: uuid`; рядкові поля без `maxLength`, масив `optionIds` без `minItems`, `maxItems`, `uniqueItems`.
+>
+> **2. Відповідність RESTful Best Practices**
+>
+> - A-04. `/api/v1/generateTest` — дієслово і camelCase у шляху. Ресурс — задача генерації: `POST /api/v1/generation-jobs` (іменник у множині, kebab-case).
+> - A-05. Генерація повертає `200` зі згенерованим тестом. Тривалість виклику Claude API до 60 с суперечить SRS-NFR-ASYNC-01 (202 Accepted, p95 ≤ 200 мс). Потрібні `202 Accepted` із заголовком `Location: /api/v1/generation-jobs/{jobId}` і тілом стану задачі та окрема операція `GET /api/v1/generation-jobs/{jobId}` (SRS-FUN-52).
+> - A-06. `/attempts/{id}/answer` — однина. Колекція: `/attempts/{attemptId}/answers`. Повторне надсилання відповіді на те саме питання (SRS-FUN-16) ідемпотентне за природою: розглянути `PUT /attempts/{attemptId}/answers/{questionId}`.
+> - A-07. Відповідь на питання повертає `correct` і `quality` під час спроби: клієнт отримує ознаку правильності до завершення тесту, що дозволяє перебір варіантів і суперечить SRS-FUN-14. Оцінка q визначається для теми при завершенні спроби (SRS-FUN-17), а не для окремої відповіді.
+> - A-08. `userId` у тілі запиту генерації: ідентичність ініціатора визначає сервер з access-токена; поле в тілі дозволяє підміну автора (BOLA).
+> - A-09. Відповідь входу не містить `tokenType`, `expiresIn`; немає операцій оновлення токена і виходу, без яких JWT-контур неповний (SRS-NFR-SEC-02, SRS-FUN-53).
+>
+> **3. Обробка помилок та Edge Cases**
+>
+> - E-01. Жодна операція не документує відповідей 4xx/5xx. Обов'язкові: `400` (валідація полів з переліком помилок), `401`, `403`, `404`, `409`, `422`, `429` (із заголовком `Retry-After`), `500`, `503` (Redis недоступний — із `Retry-After`).
+> - E-02. Немає єдиного формату помилки. Рекомендовано `application/problem+json` за RFC 9457 зі схемою `Problem` (`type`, `title`, `status`, `detail`, `instance`, розширення `errors[]`) і прикладами для кожного коду.
+> - E-03. Вхід: не описано `401` (невірні облікові дані без розрізнення «немає користувача» / «невірний пароль»), `403` (пошту не підтверджено), `429` (SRS-NFR-SEC-08).
+> - E-04. Генерація: не описано `409` (повторний ключ ідемпотентності з іншим тілом), `422` (матеріал іншого курсу, PDF без тексту), `429` (добовий ліміт вартості SRS-NFR-COST-02 і rate limit), `503`. Відсутній заголовок `Idempotency-Key` для безпечного повтору запиту клієнтом після обриву з'єднання.
+> - E-05. Відповідь: не описано `409` (спробу завершено), `422` (час спроби минув, SRS-FUN-15; варіант не належить питанню), `404` (чужа спроба, SRS-FUN-54).
+> - E-06. Для майбутніх операцій-колекцій (чернетки, учасники, спроби) не визначено пагінацію: без `page`, `limit` (з `maximum`) відповіді необмеженого розміру.
+>
+> **4. Аудит безпеки та схем даних (Security Schema)**
+>
+> - S-01. Відсутні `components.securitySchemes` і `security`: жодна операція не вимагає автентифікації. Потрібна схема `bearerAuth` (HTTP, scheme bearer, bearerFormat JWT), глобальний `security` і явний `security: []` лише для публічних операцій (вхід, реєстрація, оновлення токена, відновлення доступу).
+> - S-02. Параметр `token` у query: токен потрапляє в журнали reverse proxy, історію і заголовок Referer. Токени — лише в заголовку `Authorization` або в тілі запиту.
+> - S-03. `password` без `format: password`, `minLength: 10`, `maxLength: 128` (SRS-FUN-01); `email` без `format: email`, `maxLength: 254`.
+> - S-04. Рекомендовано передавати refresh-токен у cookie з атрибутами HttpOnly, Secure, SameSite=Strict замість тіла відповіді, щоб унеможливити читання токена скриптами.
+> - S-05. Не задокументовано заголовки rate limiting у відповідях `429` (`Retry-After`) і ролі, потрібні для кожної операції (owner, co_instructor, student).
+
+### Рішення щодо зауважень
+
+| Зауваження | Рішення автора | Що змінено |
+|---|---|---|
+| A-01. Немає `servers`, `operationId`, `license`, `tags` | Прийнято | Сервер `https://{host}/api/v1`, `operationId` для 47 операцій, ліцензія, 9 тегів з описами |
+| A-02. Немає `required`, `additionalProperties: false`, схем у `components` | Прийнято | 80 схем у `components/schemas`; усі тіла `required: true`, об'єкти з `additionalProperties: false` |
+| A-03. Нетипізований `id`, немає меж рядків і масивів | Прийнято | Ідентифікатори шляху — `format: uuid`; `maxLength`, `minItems`/`maxItems`/`uniqueItems`, `pattern` |
+| A-04. Дієслово `/generateTest` у шляху | Прийнято | `POST /courses/{courseId}/generation-jobs` |
+| A-05. 200 із тестом замість асинхронної задачі | Прийнято | 202 + `Location`, `GET /courses/{courseId}/generation-jobs/{jobId}` |
+| A-06. Однина `/answer`; пропозиція `PUT …/answers/{questionId}` | Прийнято частково: шлях `/answers` прийнято, PUT відхилено | `POST /attempts/{attemptId}/answers` з upsert за (attemptId, questionId); аргумент: ідемпотентність уже задає SRS-FUN-16, окремий ресурс PUT ускладнює матрицю маршрутів без нової властивості |
+| A-07. `correct` і `quality` у відповіді на питання | Прийнято | `AnswerAccepted` без ознаки правильності; q — у `POST /attempts/{attemptId}/completion` |
+| A-08. `userId` у тілі | Прийнято | Ініціатор визначається з access-токена; `userId` у тілах відсутній |
+| A-09. Неповний JWT-контур | Прийнято | `TokenPair` з `tokenType`, `expiresIn`, `refreshExpiresIn`; `/auth/refresh`, `/auth/logout` |
+| E-01. Немає 4xx/5xx | Прийнято | Спільні відповіді 400, 401, 403, 404, 409, 413, 415, 422, 429, 500, 503 з прикладами |
+| E-02. Немає єдиного формату помилки | Прийнято | Схема `Problem` (RFC 9457), `application/problem+json`, каталог `type` (табл. 2.10) |
+| E-03. Негативні сценарії входу | Прийнято | 401 `invalid-credentials` без розрізнення причини, 403 `email-not-verified`, 429 |
+| E-04. Негативні сценарії генерації, `Idempotency-Key` | Прийнято | Заголовок `Idempotency-Key` (UUID, Redis 24 год), 409, 422 `idempotency-key-mismatch`, 429 `budget-exceeded`, 503 |
+| E-05. Негативні сценарії відповіді | Прийнято | 409 `attempt-finished`, 422 `attempt-expired` і `option-not-in-question`, 404 для чужої спроби |
+| E-06. Немає пагінації | Прийнято | Параметри `page`, `limit` (≤ 100), конверт `{items, page, limit, total}` |
+| S-01. Немає `securitySchemes` | Прийнято | `bearerAuth` (HTTP Bearer, JWT) глобально; `security: []` лише для 7 публічних операцій Auth |
+| S-02. Токен у query | Прийнято | Токени лише в `Authorization` або в тілі запиту |
+| S-03. Немає обмежень пароля і пошти | Прийнято | `password` 10…128, `format: password`, `writeOnly`; `email` `format: email`, ≤ 254 |
+| S-04. Refresh-токен у cookie HttpOnly | Відхилено | Без змін: клієнт React Native/Expo зберігає токени в expo-secure-store (SRS-NFR-SEC-04), cookie з SameSite розраховані на браузер; захист — ротація і reuse detection (SRS-NFR-SEC-02) |
+| S-05. `Retry-After` і ролі операцій | Прийнято | Заголовок `Retry-After` для 429 і 503; розширення `x-roles` і `x-srs` у кожній операції |
+
+### Фінальна версія
+
+Контракт [api/openapi.yaml](api/openapi.yaml): 47 операцій на 40 шляхах, 9 тегів, 80 схем, 11 спільних відповідей-помилок; `redocly lint` (recommended, 2.82.0) — 0 помилок, 0 попереджень. Супровідний текст — підрозділ 2.5 [2_design.md](2_design.md) (табл. 2.9, 2.10). Коміт «docs: specify REST API contract in OpenAPI 3.0».
 
 ## Пов'язано
 

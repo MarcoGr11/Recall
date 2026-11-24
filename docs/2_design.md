@@ -606,6 +606,95 @@ flowchart LR
 
 ## 2.5. Специфікація міжсервісних контрактів та топологія API-маршрутів
 
+Контракт REST API контейнера Backend API (підрозділ 2.2.2) специфіковано у форматі OpenAPI 3.0.3 у файлі [api/openapi.yaml](./api/openapi.yaml): 47 операцій на 40 шляхах, згрупованих у 9 тегів (табл. 2.9). Специфікацію перевірено інструментом `redocly lint` (набір правил recommended) без помилок і попереджень; протокол аудиту контракту — [17-AI Insights.md](./17-AI%20Insights.md), Запис 18. Події реального часу (Socket.io) до контракту REST не входять і описані в підрозділі 2.3.
+
+### 2.5.1. Загальні правила контракту
+
+- Базовий URI — `https://{host}/api/v1`; версія API міститься в шляху, TLS термінує reverse proxy Caddy ([SRS-NFR-SEC-06](./srs.md#srs-nfr-sec-06)).
+- Ресурси названо іменниками в множині у форматі kebab-case. Переходи стану без CRUD-семантики оформлено як підресурси-іменники: `/approval`, `/rejection`, `/completion`, `/mock-test`.
+- Ідентифікатори в шляху — лише UUID (`format: uuid`). Токени, паролі й інші секрети не передаються в query-параметрах.
+- Автентифікація — схема `bearerAuth` (HTTP Bearer, JWT), задана глобально; `security: []` мають лише сім публічних операцій групи Auth.
+- Авторизація — роль у курсі перевіряє CourseRoleGuard на кожному запиті ([SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05)); ролі кожної операції наведено в розширенні `x-roles`, трасування до SRS — у розширенні `x-srs`. Запит до ресурсу іншого курсу повертає 403, до спроби іншого студента того самого курсу — 404 ([SRS-FUN-54](./srs.md#srs-fun-54)).
+- Схеми тіл запитів мають `required`, `additionalProperties: false` і межі значень: `minLength`/`maxLength`, `minimum`/`maximum`, `pattern`, `minItems`/`maxItems`/`uniqueItems`. Пошта — `format: email`, до 254 символів; пароль — від 10 до 128 символів; файл PDF — до 10 485 760 байт.
+- Значення enum збігаються з ENUM-типами схеми даних (табл. 2.11): `course_role`, `control_event_type`, `question_type`, `question_status`, `question_source`, `attempt_mode`, `attempt_status`, `attempt_event_type`, `generation_job_type`, `generation_job_status`.
+- Колекції повертаються сторінками: параметри `page` (≥ 1) і `limit` (1…100, за замовчуванням 20), конверт відповіді `{items, page, limit, total}`.
+- Створення ресурсу повертає 201 із заголовком `Location`; постановка задачі генерації — 202 із заголовком `Location` на ресурс стану задачі.
+- Помилки повертаються в одному форматі `application/problem+json` за RFC 9457 з полями `type`, `title`, `status`, `detail`, `instance`, `requestId` і масивом `errors` з JSON Pointer на поле запиту (табл. 2.10). Кожна операція документує 401 (крім публічних), 429, 500 і 503, а також коди 400, 403, 404, 409, 413, 415 і 422 відповідно до своєї логіки; для 429 і 503 передається заголовок `Retry-After`.
+
+Таблиця 2.9 – Групи операцій REST API
+
+| Група (тег) | Шляхи | Ролі | Вимоги |
+|---|---|---|---|
+| Auth | `/auth/register`, `/auth/verify-email`, `/auth/verify-email/resend`, `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/password-reset/request`, `/auth/password-reset/confirm` | Публічні, крім `logout` | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-02](./srs.md#srs-fun-02), [SRS-FUN-53](./srs.md#srs-fun-53), [SRS-FUN-55](./srs.md#srs-fun-55), [SRS-NFR-SEC-02](./srs.md#srs-nfr-sec-02) |
+| Me | `/me`, `/me/daily-plan`, `/me/memberships` | Автентифікований користувач; план — student | [SRS-FUN-05](./srs.md#srs-fun-05), [SRS-FUN-20](./srs.md#srs-fun-20), [SRS-FUN-21](./srs.md#srs-fun-21), [SRS-FUN-48](./srs.md#srs-fun-48), [SRS-FUN-50](./srs.md#srs-fun-50) |
+| Courses | `/courses`, `/courses/{courseId}`, `…/members`, `…/members/{userId}`, `…/invite-codes`, `…/invite-codes/{inviteCodeId}` | owner; читання курсу — усі ролі; учасники — owner, co_instructor | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-04](./srs.md#srs-fun-04), [SRS-FUN-06](./srs.md#srs-fun-06), [SRS-FUN-07](./srs.md#srs-fun-07) |
+| Content | `…/topics`, `…/topics/{topicId}`, `…/control-events`, `…/control-events/{controlEventId}`, `…/lecture-materials`, `…/topics/{topicId}/lecture-materials`, `…/source-tests`, `…/control-events/{controlEventId}/source-tests` | owner, co_instructor; читання тем і заходів — усі ролі | [SRS-FUN-07](./srs.md#srs-fun-07)…[SRS-FUN-11](./srs.md#srs-fun-11), [SRS-FUN-51](./srs.md#srs-fun-51), [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07) |
+| Generation | `…/generation-jobs`, `…/generation-jobs/{jobId}` | owner, co_instructor | [SRS-FUN-22](./srs.md#srs-fun-22), [SRS-FUN-52](./srs.md#srs-fun-52), [SRS-NFR-ASYNC-01](./srs.md#srs-nfr-async-01), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02) |
+| Moderation | `…/questions`, `…/questions/{questionId}`, `…/approval`, `…/rejection` | owner, co_instructor | [SRS-FUN-12](./srs.md#srs-fun-12), [SRS-FUN-28](./srs.md#srs-fun-28), [SRS-FUN-29](./srs.md#srs-fun-29) |
+| Learning | `/attempts`, `/attempts/{attemptId}`, `…/answers`, `…/completion`, `…/events` | student | [SRS-FUN-13](./srs.md#srs-fun-13)…[SRS-FUN-17](./srs.md#srs-fun-17), [SRS-FUN-19](./srs.md#srs-fun-19), [SRS-FUN-36](./srs.md#srs-fun-36)…[SRS-FUN-38](./srs.md#srs-fun-38), [SRS-FUN-54](./srs.md#srs-fun-54) |
+| Mock tests | `…/mock-tests`, `…/control-events/{controlEventId}/mock-test` | Публікація — owner, co_instructor; перелік — усі ролі | [SRS-FUN-34](./srs.md#srs-fun-34), [SRS-FUN-35](./srs.md#srs-fun-35) |
+| Monitoring | `…/heatmap`, `…/members/{userId}/mastery-confirmations/{topicId}` | owner, co_instructor | [SRS-FUN-46](./srs.md#srs-fun-46), [SRS-FUN-47](./srs.md#srs-fun-47) |
+
+Скорочення «…» у табл. 2.9 позначає префікс `/courses/{courseId}`; повний перелік операцій з методами, тілами і відповідями наведено в [api/openapi.yaml](./api/openapi.yaml).
+
+Таблиця 2.10 – Каталог типів помилок (RFC 9457)
+
+| Код | Значення `type` | Умова |
+|---|---|---|
+| 400 | `/problems/validation-error`, `/problems/invalid-token` | Тіло або параметри не відповідають схемі; одноразовий токен з листа прострочений або використаний |
+| 401 | `/problems/unauthorized`, `/problems/invalid-credentials`, `/problems/refresh-token-reused` | Відсутній або прострочений access-токен; невірна пошта або пароль (без розрізнення причини); повторне використання анульованого refresh-токена |
+| 403 | `/problems/forbidden`, `/problems/email-not-verified` | Роль у курсі не дозволяє дію або ресурс належить іншому курсу; вхід до підтвердження пошти |
+| 404 | `/problems/not-found` | Ресурс не існує або належить іншому студенту того самого курсу |
+| 409 | `/problems/email-taken`, `/problems/version-conflict`, `/problems/attempt-finished`, `/problems/already-member`, `/problems/idempotency-key-in-progress` | Конфлікт зі станом ресурсу, зокрема розбіжність версії питання під час модерації |
+| 413 | `/problems/payload-too-large` | Файл понад 10 МБ |
+| 415 | `/problems/unsupported-media-type` | Файл не є PDF за MIME-типом або сигнатурою `%PDF` |
+| 422 | `/problems/email-domain-not-allowed`, `/problems/pdf-no-text-layer`, `/problems/pdf-too-long`, `/problems/attempt-expired`, `/problems/option-not-in-question`, `/problems/invite-code-invalid`, `/problems/insufficient-question-pool`, `/problems/idempotency-key-mismatch` | Запит валідний за схемою, але порушує бізнес-правило |
+| 429 | `/problems/rate-limited`, `/problems/budget-exceeded` | Перевищено ліміт запитів ([SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08)) або добовий ліміт вартості генерації ([SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02)) |
+| 500 | `/problems/internal-error` | Непередбачена помилка; деталі — лише в журналі за `requestId` |
+| 503 | `/problems/service-unavailable` | PostgreSQL або Redis тимчасово недоступні |
+
+### 2.5.2. Критичні операції контракту
+
+**Постановка задачі генерації.** Операція `POST /courses/{courseId}/generation-jobs` приймає тіло з дискримінатором `type` (`lecture_test` з `lectureMaterialId` або `mock_questions` з `sourceTestId`) і обов'язковий заголовок `Idempotency-Key` (UUID клієнта). Ідемпотентність забезпечено на двох рівнях: ключ клієнта зберігається в Redis 24 год і захищає від повторного надсилання того самого запиту після обриву з'єднання (той самий ключ з іншим тілом → 422); серверний `idempotency_key` := SHA-256(тип, джерело, версія джерела, generation_no) є jobId BullMQ і захищає від дубліката задачі за тим самим джерелом ([SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02)). Відповідь 202 містить стан задачі і заголовок `Location` на `GET /courses/{courseId}/generation-jobs/{jobId}` ([SRS-FUN-52](./srs.md#srs-fun-52)); після вичерпання добового ліміту вартості повертається 429 `budget-exceeded` з `Retry-After` до 00:00 UTC.
+
+```yaml
+/courses/{courseId}/generation-jobs:
+  post:
+    operationId: createGenerationJob
+    x-roles: [owner, co_instructor]
+    parameters:
+      - $ref: "#/components/parameters/CourseId"
+      - $ref: "#/components/parameters/IdempotencyKey"
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/GenerationJobCreate"
+    responses:
+      "202":
+        description: Задачу прийнято.
+        headers:
+          Location:
+            $ref: "#/components/headers/Location"
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerationJob"
+      "409":
+        $ref: "#/components/responses/Conflict"
+      "422":
+        $ref: "#/components/responses/UnprocessableEntity"
+      "429":
+        $ref: "#/components/responses/TooManyRequests"
+```
+
+**Фіксація відповіді і завершення спроби.** `POST /attempts/{attemptId}/answers` фіксує відповідь ідемпотентно за парою (attemptId, questionId): повторне надсилання замінює обрані варіанти без створення нового запису ([SRS-FUN-16](./srs.md#srs-fun-16)). Відповідь 200 не містить ознаки правильності ([SRS-FUN-14](./srs.md#srs-fun-14)); відповідь після `deadlineAt` відхиляється з кодом 422 `attempt-expired` ([SRS-FUN-15](./srs.md#srs-fun-15)), до завершеної спроби — 409 `attempt-finished`. `POST /attempts/{attemptId}/completion` обчислює q для кожної теми і оновлює ReviewState в одній транзакції ([SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01)); повторний запит повертає збережений результат без повторного перерахунку.
+
+**Автентифікація.** Запити відновлення пароля і повторного листа підтвердження завжди повертають 202, а невірна пошта і невірний пароль при вході дають однакову відповідь 401: відповідь не розкриває існування облікового запису. Refresh-токен передається в тілі `POST /auth/refresh` і `POST /auth/logout`, оскільки мобільний клієнт зберігає токени в expo-secure-store ([SRS-NFR-SEC-04](./srs.md#srs-nfr-sec-04)), а не в cookie браузера; захист refresh-токена забезпечують ротація і виявлення повторного використання ([SRS-NFR-SEC-02](./srs.md#srs-nfr-sec-02)).
+
+**Завантаження PDF.** Лекційні матеріали і зразки тестів приймаються як `multipart/form-data` з частиною `file` (`contentType: application/pdf`, `maxLength: 10485760`); структура зразка тесту передається частиною `structure` типу `application/json`. Перевищення розміру повертає 413, інший тип — 415, документ без текстового шару або понад 60 сторінок чи 40 000 токенів — 422 ([SRS-FUN-51](./srs.md#srs-fun-51)).
+
 ## 2.6. Моделювання користувацького досвіду та транзакційних сценаріїв
 
 ## 2.7. Проєктування та документування моделей даних
@@ -615,12 +704,12 @@ flowchart LR
 Правила, спільні для всіх таблиць:
 - первинні ключі — `uuid DEFAULT gen_random_uuid()`, крім таблиць зв'язку зі складеними ключами;
 - часові мітки — `timestamptz` (UTC), календарні дати контрольних заходів і повторень — `date`;
-- статуси, ролі й типи — ENUM-типи PostgreSQL (табл. 2.9), значення яких збігаються з enum у контракті API (підрозділ 2.5);
+- статуси, ролі й типи — ENUM-типи PostgreSQL (табл. 2.11), значення яких збігаються з enum у контракті API (підрозділ 2.5);
 - зовнішні ключі — `ON DELETE RESTRICT`, крім дочірніх записів складу (позначено CASCADE); облікові записи не видаляються фізично: видалення за [SRS-FUN-48](./srs.md#srs-fun-48) встановлює `deleted_at` і знеособлює `email` і `display_name`, а відповіді зберігаються для агрегатів курсу;
 - складені зовнішні ключі з `course_id` унеможливлюють зв'язок об'єктів різних курсів (тема контрольного заходу, тема матеріалу, тема питання);
 - суми в USD — `numeric(10,4)`, коефіцієнт легкості — `numeric(3,2)`; типи з плаваючою комою не використовуються.
 
-Таблиця 2.9 – ENUM-типи схеми даних
+Таблиця 2.11 – ENUM-типи схеми даних
 
 | Тип | Значення | Використання |
 |---|---|---|
@@ -916,9 +1005,9 @@ erDiagram
 
 ### 2.7.1. Специфікація таблиць
 
-Специфікацію таблиць наведено в табл. 2.10. Для кожної таблиці вказано поля, що не повторюють загальних правил: `id`, `created_at`, `updated_at` мають тип і обмеження, наведені вище.
+Специфікацію таблиць наведено в табл. 2.12. Для кожної таблиці вказано поля, що не повторюють загальних правил: `id`, `created_at`, `updated_at` мають тип і обмеження, наведені вище.
 
-Таблиця 2.10 – Специфікація таблиць схеми даних
+Таблиця 2.12 – Специфікація таблиць схеми даних
 
 | Таблиця | Поле | Тип | Обмеження | Опис |
 |---|---|---|---|---|
@@ -998,9 +1087,9 @@ erDiagram
 
 ### 2.7.2. План індексів
 
-Індекси первинних ключів і обмежень UNIQUE створюються автоматично; у табл. 2.11 наведено індекси, що прискорюють запити критичних сценаріїв. Тип — B-Tree, якщо не вказано інше.
+Індекси первинних ключів і обмежень UNIQUE створюються автоматично; у табл. 2.13 наведено індекси, що прискорюють запити критичних сценаріїв. Тип — B-Tree, якщо не вказано інше.
 
-Таблиця 2.11 – План індексів
+Таблиця 2.13 – План індексів
 
 | Індекс | Таблиця (поля) | Тип | Запит, який прискорює | SRS-ID |
 |---|---|---|---|---|

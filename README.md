@@ -25,6 +25,7 @@
 - [docs/README.md](docs/README.md) — навігація пояснювальною запискою і відповідність лабораторних робіт підрозділам
 - [docs/srs.md](docs/srs.md) — специфікація вимог за ISO/IEC/IEEE 29148 (Додаток А)
 - [docs/2_design.md](docs/2_design.md) — Розділ 2. Обґрунтування архітектурних рішень та проєктування системи
+- [docs/api/openapi.yaml](docs/api/openapi.yaml) — контракт REST API (OpenAPI 3.0.3, підрозділ 2.5)
 - Зведений документ Розділів 1–2 (Google Docs): GOOGLE_DOCS_CH1_2
 
 ## Призначення
