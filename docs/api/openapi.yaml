@@ -266,7 +266,7 @@ paths:
         - Auth
       operationId: requestPasswordReset
       summary: Запит відновлення пароля
-      description: Надсилає на підтверджену пошту одноразове посилання (строк дії 30 хв). Відповідь завжди 202 незалежно від існування адреси (захист від user enumeration).
+      description: Надсилає на підтверджену пошту одноразове посилання (строк дії 30 хв). Відповідь завжди 202 незалежно від існування адреси (захист від user enumeration); лист надсилається після відповіді, тому час відповіді не залежить від існування адреси. Новий запит анулює попередні невикористані токени користувача.
       x-srs:
         - SRS-FUN-55
         - SRS-NFR-SEC-08
@@ -1885,13 +1885,14 @@ paths:
       operationId: startAttempt
       summary: Початок спроби
       description: |-
-        Створює спробу в режимі daily_plan, practice або mock_test і видає питання без ознаки правильності з рандомізованим порядком. deadlineAt := startedAt + ліміт часу зразка (mock_test) або startedAt + min(2 хв × кількість питань, 60 хв) (daily_plan, practice). У режимі daily_plan план формується повторно на момент запиту. Наявна незавершена спроба того самого режиму з чинним лімітом часу → 409 attempt-in-progress; прострочена спроба попередньо завершується зі статусом expired.
+        Створює спробу в режимі daily_plan, practice або mock_test і видає питання без ознаки правильності з рандомізованим порядком. deadlineAt := startedAt + ліміт часу зразка (mock_test) або startedAt + min(2 хв × кількість питань, 60 хв) (daily_plan, practice). У режимі daily_plan план формується повторно на момент запиту. Наявна незавершена спроба того самого режиму з чинним лімітом часу → 409 attempt-in-progress з членом-розширенням attemptId; прострочена спроба попередньо завершується зі статусом expired; одночасні запити впорядковує унікальний частковий індекс attempts (user_id, mode) WHERE status = 'in_progress'. План daily_plan без тем або схвалених питань → 422 plan-empty.
 
         Ролі: student.
       x-srs:
         - SRS-FUN-13
         - SRS-FUN-14
         - SRS-FUN-15
+        - SRS-FUN-21
         - SRS-FUN-34
         - SRS-FUN-36
         - SRS-FUN-50
@@ -2688,9 +2689,10 @@ components:
                 type: /problems/attempt-in-progress
                 title: Є незавершена спроба
                 status: 409
-                detail: Спроба 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91 цього режиму ще триває.
+                detail: Спроба цього режиму ще триває; її можна продовжити.
                 instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
                 requestId: req-7f3a9c2e
+                attemptId: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
             idempotencyInProgress:
               summary: Запит з ключем ще обробляється
               value:
@@ -2791,6 +2793,15 @@ components:
                 title: Код запрошення недійсний
                 status: 422
                 detail: Код не існує, відкликаний або строк його дії минув.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            planEmpty:
+              summary: План на день порожній
+              value:
+                type: /problems/plan-empty
+                title: План на день порожній
+                status: 422
+                detail: На сьогодні немає тем для повторення або схвалених питань.
                 instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
                 requestId: req-7f3a9c2e
             insufficientPool:
@@ -2924,6 +2935,10 @@ components:
                 maxLength: 500
           minItems: 1
           maxItems: 50
+        attemptId:
+          type: string
+          format: uuid
+          description: "Член-розширення типу attempt-in-progress: ідентифікатор незавершеної спроби для її продовження."
     CourseRole:
       type: string
       enum:
