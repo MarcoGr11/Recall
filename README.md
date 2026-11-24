@@ -32,7 +32,7 @@
 Документацію на кожному Pull Request перевіряє Docs Quality Gate ([.github/workflows/docs-linter.yml](.github/workflows/docs-linter.yml)): markdownlint і Vale. Локальна перевірка:
 
 ```bash
-npx markdownlint-cli2
+npx markdownlint-cli2@0.24.2
 vale docs README.md
 ```
 

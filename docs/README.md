@@ -55,6 +55,8 @@ Markdown-версії розділів — [1_analysis.md](1_analysis.md) і [2_
 
 Протоколи [17-AI Insights.md](17-AI%20Insights.md) і [18-Supervisor Feedback.md](18-Supervisor%20Feedback.md) з перевірки виключено: вони містять дослівні промпти і звіти, які не редагуються.
 
+Останній успішний запуск: [Docs Quality Gate #45504494237](https://github.com/MarcoGr11/Recall/actions/runs/45504494237). Локальна версія markdownlint-cli2 — 0.24.2, як у GitHub Action.
+
 ## Календарний план
 
 | № з/п | Назва етапу кваліфікаційної роботи | Термін виконання | Статус |
