@@ -8,8 +8,8 @@
 |---|---|
 | [0_intro.md](0_intro.md) | Вступ, науковий апарат |
 | [1_analysis.md](1_analysis.md) | Розділ 1. Аналіз предметної області та постановка задачі |
-| [2_design.md](2_design.md) | Розділ 2. Проєктування архітектури системи: C4 Level 1–3 (2.1–2.2), ADR (2.3) |
-| [srs.md](srs.md) | Software Requirements Specification за ISO/IEC/IEEE 29148 (SRS-FUN, SRS-NFR, сценарії верифікації) |
+| [2_design.md](2_design.md) | Розділ 2. Обґрунтування архітектурних рішень та проєктування системи: ADR (2.1), C4 Level 1–2 (2.2), C4 Level 3 (2.3) |
+| [srs.md](srs.md) | Додаток А. Software Requirements Specification за ISO/IEC/IEEE 29148 (SRS-FUN, SRS-NFR, сценарії верифікації) |
 | [adr/](adr/) | Architecture Decision Records: [ADR-001](adr/0001-choice-of-technology.md) — асинхронна генерація контенту, BullMQ на Redis |
 | [3_implementation.md](3_implementation.md) | Розділ 3. Програмна реалізація та тестування |
 | [4_conclusions.md](4_conclusions.md) | Висновки |
@@ -32,7 +32,7 @@ Markdown-версія розділу — [1_analysis.md](1_analysis.md); дже�
 | NFR-02 | Продуктивність | REST API, запис + перерахунок SM-2: p95 ≤ 500 мс при 50 RPS | k6 |
 | NFR-03 | Real-time | Доставка події WebSocket: p95 ≤ 1 с при 100 з'єднаннях | k6 |
 | NFR-04/05 | Асинхронність | Постановка задачі: 202 Accepted ≤ 200 мс; обробка ≤ 90 с, 3 спроби, dead-letter queue | k6, журнал BullMQ |
-| NFR-06/07 | Безпека | JWT (access 15 хв, refresh 30 днів з ротацією), bcrypt cost ≥ 12, RBAC за role_in_course → 403 | інтеграційні тести |
+| NFR-06/07 | Безпека | JWT (access 15 хв, refresh 30 днів з ротацією), Argon2id (m = 19 456 KiB, t = 2, p = 1), RBAC за role_in_course → 403 | інтеграційні тести |
 | NFR-09 | Безпека | 0 Critical/High у npm audit і Trivy; Quality Gate SonarQube Cloud passed | GitHub Actions |
 | NFR-10/11 | Надійність | ACID-транзакція «відповідь + ReviewState»; pg_dump щодня, RPO ≤ 24 год, RTO ≤ 1 год | тести, тестове відновлення |
 | NFR-12 | Інфраструктура | backend, worker, PostgreSQL, Redis у docker-compose з healthcheck | `docker compose up` |
