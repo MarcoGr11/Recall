@@ -41,7 +41,7 @@ paths:
         - Auth
       operationId: registerUser
       summary: Реєстрація за корпоративною поштою
-      description: "Для нової адреси створює обліковий запис з непідтвердженою поштою і надсилає лист з посиланням підтвердження (строк дії 24 год); пароль хешується Argon2id. Для вже зареєстрованої адреси обліковий запис не змінюється, а на адресу надсилається лист «обліковий запис уже існує» з посиланням на відновлення пароля. Відповідь завжди 202, лист надсилається після відповіді: ні код, ні час відповіді не розкривають існування облікового запису (захист від user enumeration, OWASP A07:2021)."
+      description: "Для нової адреси створює обліковий запис з непідтвердженою поштою і надсилає лист з посиланням підтвердження (строк дії 24 год); пароль хешується Argon2id. Для вже зареєстрованої адреси обліковий запис не змінюється, а на адресу надсилається лист «обліковий запис уже існує» з посиланням на відновлення пароля. Пароль з переліку 100 000 поширених паролів → 422 password-too-common (перевірка до пошуку адреси, тому не розкриває її існування). Відповідь завжди 202, пароль хешується і для наявної адреси, лист надсилається після відповіді: ні код, ні час відповіді не розкривають існування облікового запису (захист від user enumeration, OWASP A07:2021)."
       x-srs:
         - SRS-FUN-01
         - SRS-NFR-SEC-03
@@ -312,9 +312,10 @@ paths:
         - Auth
       operationId: confirmPasswordReset
       summary: Встановлення нового пароля
-      description: Встановлює новий пароль за одноразовим токеном і відкликає всі refresh-токени користувача. Уже видані access-токени діють до закінчення строку (до 15 хв).
+      description: Встановлює новий пароль за одноразовим токеном і відкликає всі refresh-токени користувача; пароль з переліку поширених → 422 password-too-common. Уже видані access-токени діють до закінчення строку (до 15 хв).
       x-srs:
         - SRS-FUN-55
+        - SRS-NFR-SEC-03
         - SRS-NFR-SEC-08
       security: []
       requestBody:
@@ -335,6 +336,8 @@ paths:
           $ref: "#/components/responses/PayloadTooLarge"
         "415":
           $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -2617,11 +2620,11 @@ components:
       name: page
       in: query
       required: false
-      description: Номер сторінки, з 1.
+      description: Номер сторінки, з 1; не більше 100, тому глибина вибірки обмежена 10 000 записів.
       schema:
         type: integer
         minimum: 1
-        maximum: 10000
+        maximum: 100
         default: 1
     Limit:
       name: limit
@@ -2943,6 +2946,15 @@ components:
                 title: Недостатньо схвалених питань
                 status: 422
                 detail: Для теми і типу single потрібно 10 схвалених питань, наявно 6.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            passwordTooCommon:
+              summary: Поширений пароль
+              value:
+                type: /problems/password-too-common
+                title: Пароль занадто поширений
+                status: 422
+                detail: Пароль входить до переліку поширених паролів; оберіть інший.
                 instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
                 requestId: req-7f3a9c2e
             idempotencyMismatch:

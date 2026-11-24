@@ -595,6 +595,7 @@ flowchart LR
     authS --> iToken
     authS --> iEmailTok
     authS --> iMail
+    authS --> iAudit
     courseS --> iCourse
     courseS --> iFile
     courseS --> iPdf
@@ -628,6 +629,7 @@ flowchart LR
     acS -- "emit" --> pub
     audit --> iAudit
     privS --> iUser
+    privS --> iAudit
     privS --> iAc
     privS --> iTx
 
@@ -659,19 +661,19 @@ flowchart LR
 
 | Компонент | Шар | Відповідальність | Залежності | SRS-ID |
 |---|---|---|---|---|
-| CompositionRoot | Composition Root | Створення екземплярів і зв'язування компонентів через конструктори: `api.js` для Backend API, `worker.js` для Generation Worker, спільна фабрика `createCore(adapters)`; відмова запуску при `NODE_ENV=production` і `MAIL_TRANSPORT` ≠ `smtp` | усі компоненти (DI) | — |
+| CompositionRoot | Composition Root | Створення екземплярів і зв'язування компонентів через конструктори: `api.js` для Backend API, `worker.js` для Generation Worker, спільна фабрика `createCore(adapters)`; відмова запуску при `NODE_ENV=production` і `MAIL_TRANSPORT` ≠ `smtp`, а також при `JWT_SECRET`, відсутньому, коротшому за 32 байти або рівному значенню середовища розробки; секрети читаються з Docker secrets | усі компоненти (DI) | [SRS-NFR-SEC-13](./srs.md#srs-nfr-sec-13) |
 | RequestContext | Inbound (middleware) | Генерація requestId, збереження в AsyncLocalStorage | Logger | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
-| Logger | Inbound (наскрізний) | Структуровані журнали JSON у stdout з requestId; приховування (redact) заголовка Authorization і полів password, newPassword, refreshToken, token | pino | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
-| SecurityHeaders | Inbound (middleware) | HTTP-заголовки безпеки; CORS middleware не підключено: браузерного клієнта немає, тому крос-доменні запити з браузера блокуються за замовчуванням; Socket.io створюється з `cors: false` | helmet | [SRS-NFR-SEC-06](./srs.md#srs-nfr-sec-06) |
-| IpRateLimiter | Inbound (middleware) | Ліміти за IP-адресою клієнта для публічних операцій (вхід, реєстрація, підтвердження пошти, відновлення доступу, оновлення токенів); IP — з `X-Forwarded-For`, Express `trust proxy` = 1 (довіра лише Reverse Proxy); 429 з Retry-After | express-rate-limit | [SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08) |
+| Logger | Inbound (наскрізний) | Структуровані журнали JSON у stdout з requestId; приховування (redact) шляхів `req.headers.authorization`, `*.password`, `*.newPassword`, `*.refreshToken`, `*.token`, `*.code`, маскування поштової адреси; ротація журналів Docker 5 × 10 МБ | pino | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
+| SecurityHeaders | Inbound (middleware) | HTTP-заголовки безпеки: `Cache-Control: no-store` на всіх відповідях API, `X-Content-Type-Options: nosniff`; CORS middleware не підключено: браузерного клієнта немає, тому крос-доменні запити з браузера блокуються за замовчуванням; Socket.io створюється з `cors: false` | helmet | [SRS-NFR-SEC-06](./srs.md#srs-nfr-sec-06) |
+| IpRateLimiter | Inbound (middleware) | Глобальний ліміт 300 запитів/хв на IP для всіх маршрутів до розбору тіла і ліміти за IP для публічних операцій (вхід, реєстрація, підтвердження пошти, відновлення доступу, оновлення токенів); лічильники в Redis, за його недоступності — у пам'яті процесу; IP — з `X-Forwarded-For`, Express `trust proxy` = 1 (довіра лише Reverse Proxy); 429 з Retry-After | express-rate-limit | [SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08) |
 | BodyParser | Inbound (middleware) | Розбір JSON-тіла з лімітом 100 КБ (413) і перевіркою Content-Type `application/json` (415) | express.json | [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07) |
 | UserRateLimiter | Inbound (middleware) | Ліміти на користувача за `sub` перевіреного access-токена: 100 запитів/хв, 20 завантажень PDF/год; стоїть після JwtAuthMiddleware, тому підроблений токен не впливає на чужий ліміт; 429 з Retry-After | express-rate-limit | [SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08) |
-| JwtAuthMiddleware | Inbound (middleware) | Перевірка access-токена: підпис, allowlist алгоритмів, exp, iss; 401 | jsonwebtoken | [SRS-FUN-02](./srs.md#srs-fun-02), [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01) |
+| JwtAuthMiddleware | Inbound (middleware) | Перевірка access-токена: підпис, лише алгоритм HS256, обов'язкові claims `sub`, `iss`, `aud`, `iat`, `exp`, розходження годинників ≤ 30 с, ключ за `kid` під час ротації секрету; 401 | jsonwebtoken | [SRS-FUN-02](./srs.md#srs-fun-02), [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01) |
 | SocketAuthMiddleware | Inbound (middleware) | Перевірка access-токена з поля `auth` handshake Socket.io (`io.use`); токен у query-рядку не приймається | JwtAuthMiddleware | [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05) |
 | CourseRoleGuard | Inbound (middleware) | Перевірка формату UUID `courseId` (400) до звернення до БД; декларативна перевірка role_in_course для маршруту і приєднання до кімнати через AccessPolicyService; 403 | AccessPolicyService | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-06](./srs.md#srs-fun-06), [SRS-FUN-11](./srs.md#srs-fun-11), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05) |
 | UploadMiddleware | Inbound (middleware) | Приймання multipart у тимчасовий файл на диску: PDF ≤ 10 МБ, MIME application/pdf, сигнатура %PDF; не більше 3 частин, поле `structure` ≤ 64 КБ; 413, 415. Обмеження текстового шару [SRS-FUN-51](./srs.md#srs-fun-51) перевіряє CourseService | multer | [SRS-FUN-09](./srs.md#srs-fun-09), [SRS-FUN-10](./srs.md#srs-fun-10), [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07) |
-| ValidationMiddleware | Inbound (middleware) | Валідація body, params, query за схемою zod, формування DTO; 400 | zod | [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07) |
-| ErrorHandler | Inbound (middleware) | Відображення доменних помилок у HTTP-коди, формат RFC 9457, без stack trace | Logger | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
+| ValidationMiddleware | Inbound (middleware) | Валідація body, params, query за схемою zod у режимі `.strict()` (невідоме поле → 400), формування DTO; масив `errors` не містить вхідних значень | zod | [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07) |
+| ErrorHandler | Inbound (middleware) | Відображення доменних помилок у HTTP-коди, формат RFC 9457, без stack trace і без вхідних значень | Logger | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
 | HealthController | Inbound | GET /health лише у внутрішній мережі docker-compose (Reverse Proxy цей шлях не публікує): 200 за доступності PostgreSQL, 503 — за недоступності; стан Redis — у полі `queue` (`up`, `down`) без впливу на код відповіді | HealthService | [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
 | AuthController | Inbound | Реєстрація, підтвердження пошти, вхід, оновлення токенів, вихід, відновлення доступу, профіль поточного користувача (`GET /me`) | AuthService | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-02](./srs.md#srs-fun-02), [SRS-FUN-53](./srs.md#srs-fun-53), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | CourseController | Inbound | Курси, теми, контрольні заходи, коди запрошення, матеріали, зразки | CourseService, InvitationService | [SRS-FUN-04](./srs.md#srs-fun-04)…[SRS-FUN-10](./srs.md#srs-fun-10) |
@@ -687,7 +689,7 @@ flowchart LR
 | JobEventsListener | Inbound | Підписка на BullMQ QueueEvents (completed, failed) черг generation і maintenance; для задачі завершення прострочених спроб — публікація події завершення спроби за переліком `expiredAttemptIds` у кімнати курсів питань спроби; передача в ProgressPublisher | ProgressPublisher, Redis | [SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-15](./srs.md#srs-fun-15), [SRS-FUN-43](./srs.md#srs-fun-43) |
 | AccessPolicyService | Core (courses) | Визначення role_in_course користувача в курсі для CourseRoleGuard і ProgressGateway | ICourseRepository | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-06](./srs.md#srs-fun-06), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05) |
 | HealthService | Core (platform) | Перевірка доступності PostgreSQL (визначає код відповіді) і Redis (поле `queue`) для GET /health | ITransactionManager, IJobQueue | [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
-| AuthService | Core | Перевірка домену корпоративної пошти; реєстрація без розкриття існування облікового запису (завжди 202, для наявної адреси — лист «обліковий запис уже існує»); вхід з перевіркою пароля до перевірки підтвердження пошти і хешуванням фіктивного пароля для відсутньої адреси; одноразові токени підтвердження пошти і відновлення доступу (зберігається хеш SHA-256), видача і ротація токенів, reuse detection, вихід із відкликанням сімейства refresh-токенів, хешування паролів Argon2id | IUserRepository, IRefreshTokenRepository, IEmailTokenRepository, IMailSender | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-02](./srs.md#srs-fun-02), [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01)…[SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03), [SRS-FUN-53](./srs.md#srs-fun-53), [SRS-FUN-55](./srs.md#srs-fun-55) |
+| AuthService | Core | Перевірка домену корпоративної пошти; реєстрація без розкриття існування облікового запису (завжди 202, для наявної адреси — лист «обліковий запис уже існує»); вхід з перевіркою пароля до перевірки підтвердження пошти і хешуванням фіктивного пароля для відсутньої адреси; одноразові токени підтвердження пошти і відновлення доступу (зберігається хеш SHA-256), видача і ротація токенів, reuse detection, вихід із відкликанням сімейства refresh-токенів, хешування паролів Argon2id (бібліотека `argon2`, повторне хешування застарілих параметрів, нормалізація NFKC, перелік поширених паролів, не більше 4 обчислень одночасно); ротація refresh-токена під `SELECT … FOR UPDATE`; ліміт невдалих входів за парою «адреса + IP» і за адресою; запис подій `password_reset` і `token_reuse` в журнал аудиту | IUserRepository, IRefreshTokenRepository, IEmailTokenRepository, IMailSender, IAuditLogRepository | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-02](./srs.md#srs-fun-02), [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01)…[SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03), [SRS-FUN-53](./srs.md#srs-fun-53), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | CourseService | Core (courses) | Курси, теми, контрольні заходи, ролі, обмеження co-instructor; перевірка належності вкладених ідентифікаторів (тема, контрольний захід, учасник) курсу зі шляху, інакше 404; перевірка текстового шару PDF (≤ 60 сторінок, ≤ 40 000 токенів, доменні помилки `pdf-no-text-layer`, `pdf-too-long` → 422); збереження PDF до транзакції і видалення файлу при її відкаті; запис матеріалу і журналу аудиту в одній транзакції | ICourseRepository, IFileStorage, IPdfTextExtractor, ITransactionManager, ContentAuditLog | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-06](./srs.md#srs-fun-06)…[SRS-FUN-10](./srs.md#srs-fun-10), [SRS-FUN-51](./srs.md#srs-fun-51) |
 | InvitationService | Core | Створення, відкликання і застосування кодів запрошення | ICourseRepository | [SRS-FUN-04](./srs.md#srs-fun-04), [SRS-FUN-05](./srs.md#srs-fun-05) |
 | TestDeliveryService | Core | Рандомізація питань і варіантів, видача без ознаки правильної відповіді, серверний таймер, перевірка власника спроби і чинного членства student у курсі спроби (інакше 404) | IQuestionReadRepository, IAttemptRepository | [SRS-FUN-13](./srs.md#srs-fun-13)…[SRS-FUN-15](./srs.md#srs-fun-15), [SRS-FUN-54](./srs.md#srs-fun-54) |
@@ -704,12 +706,12 @@ flowchart LR
 | AntiCheatEventService | Core | Збереження подій виходу і знімків екрана, агрегати для моніторингу | IAntiCheatEventRepository, ProgressPublisher | [SRS-FUN-37](./srs.md#srs-fun-37)…[SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-41](./srs.md#srs-fun-41) |
 | ProgressPublisher | Core (monitoring) | Шина доменних подій (EventEmitter) у межах процесу для прогресу, антисписування, задач генерації і завершення спроб; `emit` — лише після COMMIT; доставка best-effort | — | [SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-43](./srs.md#srs-fun-43) |
 | ContentAuditLog | Core | Журнал дій з контентом | IAuditLogRepository | [SRS-FUN-12](./srs.md#srs-fun-12) |
-| PrivacyService | Core (privacy) | Повторна автентифікація поточним паролем (403 `reauthentication-failed`); відмова для власника курсів (409 `owner-has-courses`); видалення облікового запису зі знеособленням і видаленням подій антисписування в одній транзакції; видалення подій антисписування за строком | IUserRepository, IAntiCheatEventRepository, ITransactionManager | [SRS-FUN-48](./srs.md#srs-fun-48), [SRS-FUN-49](./srs.md#srs-fun-49) |
+| PrivacyService | Core (privacy) | Повторна автентифікація поточним паролем (403 `reauthentication-failed`); відмова для власника курсів (409 `owner-has-courses`); видалення облікового запису зі знеособленням і видаленням подій антисписування в одній транзакції; видалення подій антисписування за строком; запис події `delete` сутності `user` в журнал аудиту | IUserRepository, IAntiCheatEventRepository, IAuditLogRepository, ITransactionManager | [SRS-FUN-48](./srs.md#srs-fun-48), [SRS-FUN-49](./srs.md#srs-fun-49) |
 | IUserRepository, IRefreshTokenRepository, IEmailTokenRepository (таблиці email_verification_tokens і password_reset_tokens), IMailSender, ICourseRepository, IAttemptRepository, IReviewStateRepository, IQuestionReadRepository, IQuestionWriteRepository, IAntiCheatEventRepository, IAuditLogRepository, IGenerationJobRepository, ITransactionManager, IFileStorage, IPdfTextExtractor, IJobQueue | Ports | Інтерфейси сховищ, транзакцій, файлів, вилучення тексту і черги, описані JSDoc; поточна транзакція ITransactionManager зберігається в AsyncLocalStorage; IQuestionReadRepository не повертає ознаку правильної відповіді (ISP) | — | [SRS-FUN-14](./srs.md#srs-fun-14), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
-| Pg*Repository, PgTransactionManager | Outbound | Реалізації репозиторіїв і транзакцій на Kysely з драйвером pg; лише параметризовані запити; обмеження UNIQUE (attempt_id, question_id) | Kysely, pg, PostgreSQL 16 | [SRS-FUN-16](./srs.md#srs-fun-16), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
-| PdfjsTextExtractor | Outbound | Вилучення текстового шару і кількості сторінок PDF в пулі з двох потоків `worker_threads` з тайм-аутом 30 с на документ, щоб не блокувати event loop | pdfjs-dist | [SRS-FUN-51](./srs.md#srs-fun-51) |
-| LocalFileStorage | Outbound | Запис PDF у Docker volume | fs | [SRS-FUN-09](./srs.md#srs-fun-09), [SRS-FUN-10](./srs.md#srs-fun-10) |
-| SmtpMailSender | Outbound | Надсилання листів підтвердження пошти і відновлення доступу через SMTP після фіксації транзакції і відповіді клієнту, тайм-аут з'єднання 10 с; збій журналюється без повтору, користувач повторює запит; посилання містить одноразовий токен | nodemailer, SMTP-провайдер | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
+| Pg*Repository, PgTransactionManager | Outbound | Реалізації репозиторіїв і транзакцій на Kysely з драйвером pg; лише параметризовані запити; фільтр за `courseId` для сутностей курсу і за `userId` для спроб; явний перелік полів INSERT, UPDATE і SELECT (`password_hash` — лише в методі перевірки пароля); обмеження UNIQUE (attempt_id, question_id) | Kysely, pg, PostgreSQL 16 | [SRS-FUN-16](./srs.md#srs-fun-16), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
+| PdfjsTextExtractor | Outbound | Вилучення текстового шару і кількості сторінок PDF в пулі з двох потоків `worker_threads` з тайм-аутом 30 с на документ і `resourceLimits` 256 МБ, щоб не блокувати event loop; `isEvalSupported: false` | pdfjs-dist ≥ 4.2.67 | [SRS-FUN-51](./srs.md#srs-fun-51) |
+| LocalFileStorage | Outbound | Запис PDF у Docker volume під серверним ім'ям UUID; видалення тимчасового файлу multer у блоці `finally` | fs | [SRS-FUN-09](./srs.md#srs-fun-09), [SRS-FUN-10](./srs.md#srs-fun-10) |
+| SmtpMailSender | Outbound | Надсилання листів підтвердження пошти і відновлення доступу через SMTP (`requireTLS: true`) після фіксації транзакції і відповіді клієнту, тайм-аут з'єднання 10 с; збій журналюється без повтору, користувач повторює запит; посилання містить одноразовий токен | nodemailer, SMTP-провайдер | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | ConsoleMailSender | Outbound | Реалізація IMailSender для середовищ dev і test: лист з посиланням записується в журнал застосунку замість надсилання; адаптер обирається змінною оточення `MAIL_TRANSPORT` (`smtp` або `console`), у production допускається лише `smtp` | pino | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | BullMqJobQueue | Outbound | Постановка задач BullMQ з jobId := idempotency_key, attempts = 3, exponential backoff 5 с, requestId у даних задачі | bullmq, Redis 7 | [SRS-NFR-ASYNC-03](./srs.md#srs-nfr-async-03), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
 
@@ -727,11 +729,82 @@ flowchart LR
 | next() / next(err) | Передача керування наступному middleware або ErrorHandler |
 | SQL/TCP 5432, RESP/TCP 6379 | Мережеві виклики до PostgreSQL і Redis |
 
+### 2.3.3. Взаємодія шарів серверного ядра
+
+Запит проходить шари Inbound → Core → Outbound; шар Ports містить лише інтерфейси, які визначає Core і реалізує Outbound (рис. 2.4). Кожен шар відповідає за окрему частину захисту, тому перевірки не дублюються і не пропускаються:
+
+- **Inbound** перевіряє форму запиту: IP-ліміт, розмір і тип тіла, підпис і claims access-токена, роль у курсі зі шляху, схему zod у строгому режимі. Контролер перетворює запит на вхідний DTO, викликає один метод сервісу Core і перетворює результат на вихідний DTO операції. Контролер не містить бізнес-правил і не звертається до бази даних. ErrorHandler відображає доменні помилки в коди HTTP у форматі RFC 9457.
+- **Core** перевіряє зміст запиту: належність ресурсу користувачу і курсу, стан сутності, бізнес-ліміти (BudgetGuard, ліміт невдалих входів). Сервіс отримує залежності через конструктор і звертається лише до портів. Транзакцію відкриває сервіс через ITransactionManager; репозиторії в межах транзакції отримують з'єднання з AsyncLocalStorage. Чисті функції QualityScorer, SM2Scheduler і PlanAllocator виконують обчислення без I/O.
+- **Outbound** виконує параметризовані запити Kysely. Кожен метод репозиторію для сутностей курсу приймає `courseId`, а для спроб — `userId`, і додає їх в умову WHERE; рядок іншого курсу або іншого студента не повертається, і сервіс відповідає 404. Поля для INSERT і UPDATE репозиторій перелічує явно; поля `status`, `role`, `version`, `course_id`, `user_id` не беруться з DTO. Вибірки перелічують колонки явно, `password_hash` повертає лише метод перевірки пароля.
+
+**Приклад: завершення спроби** (`POST /attempts/{attemptId}/completion`, API-REQ-42):
+
+1. Конвеєр middleware перевіряє access-токен (401), ліміт користувача (429) і UUID `attemptId` (400). CourseRoleGuard не застосовується: `courseId` у шляху немає.
+2. AttemptController викликає `AttemptService.finish(userId, attemptId)`, де `userId` — `sub` перевіреного токена, а не значення з тіла запиту.
+3. AttemptService відкриває транзакцію і викликає `IAttemptRepository.lockOwned(attemptId, userId)`: `SELECT … WHERE id = $1 AND user_id = $2 FOR UPDATE`. Відсутній рядок → 404 без розкриття існування чужої спроби.
+4. Для спроби в стані `finished` або `expired` сервіс повертає збережений результат без повторного перерахунку: паралельний другий запит чекає на блокування рядка і отримує той самий результат.
+5. Сервіс читає відповіді, обчислює q через QualityScorer і новий стан через SM2Scheduler, записує результат і ReviewState через IReviewStateRepository (підрозділ 2.8.1) і фіксує транзакцію.
+6. Після COMMIT ProgressPublisher публікує подію завершення спроби в кімнату курсу.
+7. Контролер повертає 200 з вихідним DTO `AttemptResult`; поля, яких немає в схемі операції, у відповідь не потрапляють.
+
 ## 2.4. Контур безпеки програмного рішення (Application Security)
+
+Контур безпеки охоплює Backend API, Generation Worker, Reverse Proxy, сховища і конвеєр CI. Цільовий рівень перевірки — OWASP ASVS 4.0.3 рівня 1. Відповідність категоріям OWASP Top 10:2021 і OWASP API Security Top 10:2023 наведено в табл. 2.13: для кожної категорії вказано механізм, компоненти з табл. 2.11, вимоги SRS і сценарій верифікації. Категорія A10:2021 (SSRF) незастосовна: сервер звертається лише до фіксованих адрес Claude API і SMTP-провайдера з конфігурації і не завантажує URL, отримані від користувача. Протокол аудиту контуру — [17-AI Insights.md](./17-AI%20Insights.md), Запис 24.
+
+Таблиця 2.13 – Відповідність механізмів захисту категоріям OWASP
+
+| Категорія | Механізм | Компоненти | Вимоги | Перевірка |
+|---|---|---|---|---|
+| A01 Broken Access Control; API1 BOLA; API5 BFLA | Роль у курсі на кожному запиті; фільтр репозиторіїв за `courseId` і `userId`, чужий ресурс → 404; заборона за замовчуванням: кожен маршрут декларує ролі | CourseRoleGuard, AccessPolicyService, сервіси Core, Pg*Repository | [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05), [SRS-FUN-54](./srs.md#srs-fun-54) | VER-07, VER-09 |
+| API3 Broken Object Property Level Authorization | zod `.strict()`, явний перелік полів у репозиторіях, вихідні DTO | ValidationMiddleware, контролери, Pg*Repository | [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05), [SRS-FUN-14](./srs.md#srs-fun-14) | VER-08, VER-09 |
+| A02 Cryptographic Failures | TLS 1.2+ на Reverse Proxy; Argon2id для паролів; SHA-256 для refresh- і одноразових токенів; секрет HS256 ≥ 32 байти; шифрування резервних копій | Reverse Proxy, AuthService, CompositionRoot, Backup Job | [SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03), [SRS-NFR-SEC-06](./srs.md#srs-nfr-sec-06), [SRS-NFR-SEC-13](./srs.md#srs-nfr-sec-13) | VER-07, VER-19 |
+| A03 Injection | Параметризовані запити Kysely, заборона `sql.raw` правилом ESLint, сортування лише константами коду; валідація відповіді LLM схемою zod | Pg*Repository, Generation Worker | [SRS-NFR-SEC-12](./srs.md#srs-nfr-sec-12), [SRS-FUN-25](./srs.md#srs-fun-25) | VER-13, VER-26 |
+| A04 Insecure Design; API4 Unrestricted Resource Consumption; API6 Unrestricted Access to Sensitive Business Flows | Ліміти за IP і користувачем; ліміти тіла і файлу; семафор Argon2id; `page`, `limit` ≤ 100; блокування рядків у транзакціях; добовий ліміт вартості LLM | IpRateLimiter, BodyParser, UserRateLimiter, UploadMiddleware, AuthService, AttemptService, BudgetGuard | [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07), [SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08), [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) | VER-08, VER-10, VER-23 |
+| A05 Security Misconfiguration; API8 Security Misconfiguration | Назовні лише порт 443; Redis з паролем і ACL; GET /health лише у внутрішній мережі; відповіді без stack trace; `Cache-Control: no-store`; обмеження контейнерів | Reverse Proxy, SecurityHeaders, ErrorHandler, HealthController | [SRS-NFR-SEC-06](./srs.md#srs-nfr-sec-06), [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) | VER-19 |
+| A06 Vulnerable and Outdated Components | npm audit і Trivy з порогом High, Dependabot, мінімальна версія pdfjs-dist 4.2.67 | CI, PdfjsTextExtractor | [SRS-NFR-SEC-09](./srs.md#srs-nfr-sec-09), [SRS-NFR-SEC-10](./srs.md#srs-nfr-sec-10) | VER-18 |
+| A07 Identification and Authentication Failures; API2 Broken Authentication | Відповіді без розкриття існування облікового запису; ліміти невдалих входів; ротація refresh-токенів з reuse detection; перевірка claims JWT; перелік поширених паролів | AuthService, JwtAuthMiddleware, SocketAuthMiddleware | [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01)…[SRS-NFR-SEC-04](./srs.md#srs-nfr-sec-04), [SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08) | VER-07, VER-08, VER-22 |
+| A08 Software and Data Integrity Failures | `npm ci` за lock-файлом, GitHub Actions за SHA, образи за digest, SBOM; валідація даних задачі черги | CI, Generation Worker, BullMqJobQueue | [SRS-NFR-SEC-11](./srs.md#srs-nfr-sec-11), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02) | VER-12, VER-18 |
+| A09 Security Logging and Monitoring Failures | Журнали JSON з requestId і redact секретів; події безпеки в `audit_log`; ротація журналів | Logger, ContentAuditLog, AuthService, PrivacyService | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01), [SRS-FUN-12](./srs.md#srs-fun-12) | VER-22 |
+| API10 Unsafe Consumption of APIs | Відповідь Claude API валідується схемою zod; tool use не використовується; чернетки публікуються лише після модерації | Generation Worker, ModerationService | [SRS-FUN-25](./srs.md#srs-fun-25), [SRS-FUN-28](./srs.md#srs-fun-28) | VER-05, VER-13 |
+| A10 Server-Side Request Forgery | Незастосовна: URL від користувача не завантажуються | — | — | — |
+
+**Автентифікація і сесії.** AuthService хешує пароль бібліотекою `argon2` (Argon2id, m = 19 456 KiB, t = 2, p = 1, сіль 16 байт, хеш 32 байти): параметри відповідають мінімуму OWASP Password Storage Cheat Sheet. Під час входу хеш із застарілими параметрами перераховується. Пароль нормалізується за NFKC, довжина 10…128 рахується в символах; пароль з локального переліку 100 000 поширених паролів відхиляється з 422 `password-too-common` без звернення до зовнішніх сервісів. На процес виконується не більше 4 обчислень Argon2id одночасно, черга — до 50 запитів, далі 503 з Retry-After: так обмежено споживання пам'яті (близько 19 МіБ на обчислення) при розподіленому переборі. Реєстрація обчислює хеш для кожного запиту, а вхід для відсутньої адреси — хеш фіктивного пароля, тому час відповіді не розкриває існування облікового запису ([SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03)).
+
+Access-токен — JWT HS256 зі строком 15 хв. JwtAuthMiddleware приймає лише алгоритм HS256 і вимагає claims `sub`, `iss`, `aud`, `iat`, `exp`; відсутній claim, інший алгоритм або розходження годинників понад 30 с → 401. HS256 обрано, оскільки токени видає і перевіряє той самий процес і асиметричний ключ не потрібен. Секрет передається як Docker secret; CompositionRoot не запускає процес, якщо секрет відсутній, коротший за 32 байти або дорівнює значенню середовища розробки. Ротація секрету виконується через заголовок `kid`: протягом 15 хв приймаються обидва ключі, тому користувачі не виходять із сесії ([SRS-NFR-SEC-13](./srs.md#srs-nfr-sec-13)).
+
+Refresh-токен — випадковий рядок з 32 байтів (base64url); у таблиці `refresh_tokens` зберігається лише його хеш SHA-256. Сімейство токенів однієї сесії живе не довше 30 днів від входу: новий токен успадковує `expires_at` попереднього. Ротацію AuthService виконує в транзакції під `SELECT … FOR UPDATE` за хешем токена, тому два паралельні запити з одним токеном не створюють двох гілок сімейства; повторне використання анульованого токена відкликає сімейство і повертає 401 ([SRS-NFR-SEC-02](./srs.md#srs-nfr-sec-02)). Вікна допустимої гонки (grace window) немає: Mobile App виконує одне оновлення одночасно.
+
+Відкликання сесій має межу: після виходу і зміни пароля вже видані access-токени діють до закінчення строку (до 15 хв), оскільки JwtAuthMiddleware не звертається до бази даних. Для видаленого облікового запису ця межа не діє: сервіси Core отримують поточного користувача через IUserRepository лише за умови `deleted_at IS NULL`, тому запит із чинним токеном видаленого користувача отримує 401.
+
+**Валідація вхідних і вихідних даних.** ValidationMiddleware перевіряє body, params і query схемами zod у режимі `.strict()`: невідоме поле → 400 (захист від Mass Assignment, API3). Масив `errors` у відповіді містить JSON Pointer і правило, але не повторює вхідних значень, тому пароль не потрапляє ні у відповідь, ні в журнал. Другий рубіж — репозиторії з явним переліком полів (підрозділ 2.3.3). Відповідь кожної операції формує вихідний DTO, а контрактні тести звіряють відповіді з [api/openapi.yaml](./api/openapi.yaml); нова колонка таблиці не з'являється у відповіді без зміни схеми. Пагінація обмежена значеннями `page` ≤ 100 і `limit` ≤ 100, тобто глибиною 10 000 записів.
+
+**Контроль доступу.** Кожен маршрут декларує доступ: публічний, автентифікований або перелік ролей `requireCourseRole(...)`; маршрут без декларації не реєструється. Тест у CI звіряє декларації маршрутів із розширенням `x-roles` контракту. CourseRoleGuard перевіряє роль за `courseId` зі шляху (403), а належність вкладених ідентифікаторів і спроб перевіряють репозиторії (404). Для маршрутів без `courseId` (`/attempts/…`, `/me/daily-plan`) роль student перевіряє сервіс Core (табл. 2.11). Generation Worker не проходить HTTP-конвеєр, тому перевіряє дані задачі схемою zod і повторно перевіряє належність матеріалу курсу перед викликом Claude API.
+
+**Ін'єкції.** Запити до PostgreSQL виконує Kysely з параметрами; `sql.raw` і шаблонні рядки SQL з даними запиту забороняє правило ESLint, порядок сортування задається лише константами коду ([SRS-NFR-SEC-12](./srs.md#srs-nfr-sec-12)). Ключі Redis будуються з перевірених UUID і серверних хешів. Текст лекції потрапляє в промпт Claude API (LLM01 Prompt Injection за OWASP Top 10 for LLM Applications 2025): наслідки ін'єкції обмежено тим, що модель не має tool use, її відповідь валідується схемою zod, а питання зберігаються як чернетки `draft` і доступні студентам лише після схвалення викладачем. У Claude API передається лише текст лекції, без персональних даних користувачів; ліміт витрат задано і в BudgetGuard, і в консолі Anthropic.
+
+**Обмеження ресурсів.** IpRateLimiter стоїть до BodyParser і обмежує 300 запитів/хв на IP для всіх маршрутів, тому запити з невалідним токеном теж обмежені. Ліміти публічних операцій, невдалих входів і користувача наведено в [SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08). Невдалі входи рахує AuthService за парою «поштова адреса + IP» (5/хв) і за адресою (100/год), у тому числі для незареєстрованих адрес: атакувальник з іншої IP-адреси не блокує вхід власнику облікового запису, а однакова відповідь 429 не розкриває існування адреси. Лічильники зберігаються в Redis і спільні для процесів; за недоступності Redis ліміти рахуються в пам'яті процесу.
+
+**Файли.** UploadMiddleware приймає PDF ≤ 10 МБ і перевіряє MIME-тип та сигнатуру `%PDF` ([SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07)); ці перевірки відсікають випадкові помилки, а не шкідливий вміст. Захист від шкідливого PDF забезпечує PdfjsTextExtractor: pdfjs-dist версії не нижче 4.2.67 (CVE-2024-4367) з `isEvalSupported: false`, потоки `worker_threads` з `resourceLimits` 256 МБ і тайм-аутом 30 с. Файл зберігається під серверним ім'ям UUID, а не `originalname`; тимчасовий файл multer видаляється в блоці `finally` за будь-якого результату.
+
+**Канал WebSocket.** SocketAuthMiddleware приймає access-токен лише з поля `auth` handshake. Персональну кімнату `user:{userId}` сервер призначає за `sub` токена, клієнт її не обирає; приєднання до кімнати `course:{courseId}` дозволене лише ролям owner і co_instructor. Строк дії токена перевіряється на кожній події, вхідні події валідуються схемами zod, ліміт — 60 подій/хв на з'єднання. Cross-Site WebSocket Hijacking неможливий: токен не зберігається в cookie, а Socket.io створюється з `cors: false`.
+
+**Заголовки і помилки.** SecurityHeaders додає `Cache-Control: no-store` до всіх відповідей API, щоб токени і персональні дані не зберігалися в кешах, і `X-Content-Type-Options: nosniff`; заголовки CSP і frame не потрібні JSON API без браузерного клієнта. ErrorHandler не повертає stack trace; GET /health доступний лише у внутрішній мережі.
+
+**Журналювання подій безпеки.** Logger (pino) пише JSON з requestId і приховує шляхи `req.headers.authorization`, `*.password`, `*.newPassword`, `*.refreshToken`, `*.token`, `*.code`; поштова адреса в журналі маскується. У таблицю `audit_log` записуються події безпеки: зміна пароля (`password_reset`) і повторне використання refresh-токена (`token_reuse`) — AuthService через IAuditLogRepository; зміна і вилучення ролей (`role_change`, `revoke`) — CourseService; видалення облікового запису (`delete`, сутність `user`) — PrivacyService. Невдалі входи, відповіді 401, 403, 404 і 429 фіксуються в журналі pino з requestId і `sub`. Docker обмежує журнали контейнера 5 файлами по 10 МБ. Автоматичні сповіщення поза межами MVP: журнали переглядаються вручну.
+
+**Інфраструктура.** Цільова production-конфігурація docker-compose публікує назовні лише порт 443 Reverse Proxy; Backend API, PostgreSQL і Redis доступні лише у внутрішній мережі, тому `X-Forwarded-For` формує лише Reverse Proxy (за появи CDN перед ним змінюється значення `trust proxy`). Caddy отримує сертифікат за ACME-викликом TLS-ALPN-01, який працює лише з портом 443. Redis вимагає пароль і ACL-користувача. Трафік до PostgreSQL і Redis усередині мережі docker не шифрується: цей ризик прийнято, оскільки мережа ізольована на одному хості. Certificate pinning у Mobile App не застосовується через ротацію сертифіката кожні 90 днів. PostgreSQL має три ролі: `recall_migrator` (DDL, міграції Kysely Migrator), `recall_app` (DML для Backend API; у `audit_log` лише INSERT і SELECT) і `recall_worker` (DML на таблиці генерації). Контейнери запускаються від непривілейованого користувача з `read_only: true` (tmpfs для тимчасових файлів multer), `no-new-privileges`, `cap_drop: ALL` і обмеженням `pids`; образи закріплено за digest.
+
+**Ланцюг постачання.** Цільовий конвеєр CI на кожен Pull Request блокує злиття, якщо не пройдено: `npm ci` за lock-файлом; `npm audit --audit-level=high`; Trivy для образів з порогом Critical/High і SBOM CycloneDX; Quality Gate SonarQube Cloud; gitleaks для секретів. GitHub Actions закріплено за SHA, `GITHUB_TOKEN` має мінімальні `permissions`, оновлення залежностей пропонує Dependabot ([SRS-NFR-SEC-09](./srs.md#srs-nfr-sec-09)…[SRS-NFR-SEC-11](./srs.md#srs-nfr-sec-11), [SRS-NFR-SEC-13](./srs.md#srs-nfr-sec-13)).
+
+**Дані в спокої і на клієнті.** Поля бази даних не шифруються на рівні застосунку: паролі і токени зберігаються лише як хеші, а інші дані захищено доступом до хоста. Резервні копії (щоденний pg_dump і архів тому PDF) шифруються утилітою `age` перед перенесенням на окремий носій. Видалений обліковий запис залишається в резервних копіях до 7 днів ([SRS-NFR-REL-03](./srs.md#srs-nfr-rel-03)); цей строк прийнято як сумісний із правом на видалення. Mobile App зберігає токени в expo-secure-store з класом доступності `WHEN_UNLOCKED_THIS_DEVICE_ONLY`, тому вони не потрапляють у резервну копію iCloud і на інший пристрій ([SRS-NFR-SEC-04](./srs.md#srs-nfr-sec-04)). Universal links верифікуються файлами `assetlinks.json` (Android App Links з `autoVerify`) і `apple-app-site-association`; аналітичних SDK і сервісів crash-reporting у застосунку немає, тому фрагмент `#token=…` не передається третім сторонам. Виявлення root і jailbreak не застосовується.
+
+**Пошта.** SmtpMailSender встановлює з'єднання з `requireTLS: true`: без STARTTLS лист не надсилається, тому атака пониження не розкриває одноразові токени. Домен відправника має записи SPF, DKIM і DMARC.
+
+Чинні файли репозиторію `docker-compose.yml` і `.github/workflows/ci.yml` поки відрізняються від цільової конфігурації; розбіжність записано як задачу етапу реалізації в [13-TBD відкриті питання.md](./engineering/13-TBD%20відкриті%20питання.md).
 
 ## 2.5. Специфікація міжсервісних контрактів та топологія API-маршрутів
 
-Контракт REST API контейнера Backend API (підрозділ 2.2.2) специфіковано у форматі OpenAPI 3.0.3 у файлі [api/openapi.yaml](./api/openapi.yaml): 47 операцій на 41 шляху, згрупованих у 9 тегів (табл. 2.13). Специфікацію перевірено інструментом `redocly lint` (набір правил recommended) без помилок і попереджень; протокол аудиту контракту — [17-AI Insights.md](./17-AI%20Insights.md), Запис 18. Події реального часу (Socket.io) до контракту REST не входять і описані в підрозділі 2.3.
+Контракт REST API контейнера Backend API (підрозділ 2.2.2) специфіковано у форматі OpenAPI 3.0.3 у файлі [api/openapi.yaml](./api/openapi.yaml): 47 операцій на 41 шляху, згрупованих у 9 тегів (табл. 2.14). Специфікацію перевірено інструментом `redocly lint` (набір правил recommended) без помилок і попереджень; протокол аудиту контракту — [17-AI Insights.md](./17-AI%20Insights.md), Запис 18. Події реального часу (Socket.io) до контракту REST не входять і описані в підрозділі 2.3.
 
 ### 2.5.1. Загальні правила контракту
 
@@ -741,13 +814,13 @@ flowchart LR
 - Автентифікація — схема `bearerAuth` (HTTP Bearer, JWT), задана глобально; `security: []` мають лише сім публічних операцій групи Auth.
 - Авторизація — роль у курсі перевіряє CourseRoleGuard на кожному запиті ([SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05)); ролі кожної операції наведено в розширенні `x-roles`, трасування до SRS — у розширенні `x-srs`. Запит до ресурсу іншого курсу повертає 403, до спроби іншого студента того самого курсу — 404 ([SRS-FUN-54](./srs.md#srs-fun-54)). Для маршрутів без `courseId` у шляху (`/me/daily-plan`, `/attempts/…`) роль student перевіряє сервіс Core (PlanController, AttemptService, табл. 2.11). Вкладений ідентифікатор (тема, захід, матеріал, зразок, питання, учасник) іншого курсу в шляху або тілі → 404.
 - Схеми тіл запитів мають `required`, `additionalProperties: false` і межі значень: `minLength`/`maxLength`, `minimum`/`maximum`, `pattern`, `minItems`/`maxItems`/`uniqueItems`. Пошта — `format: email`, до 254 символів; пароль — від 10 до 128 символів; файл PDF — до 10 485 760 байт.
-- Значення enum збігаються з ENUM-типами схеми даних (табл. 2.28): `course_role`, `control_event_type`, `question_type`, `question_status`, `question_source`, `attempt_mode`, `attempt_status`, `attempt_event_type`, `generation_job_type`, `generation_job_status`.
-- Колекції повертаються сторінками: параметри `page` (≥ 1) і `limit` (1…100, за замовчуванням 20), конверт відповіді `{items, page, limit, total}`.
+- Значення enum збігаються з ENUM-типами схеми даних (табл. 2.29): `course_role`, `control_event_type`, `question_type`, `question_status`, `question_source`, `attempt_mode`, `attempt_status`, `attempt_event_type`, `generation_job_type`, `generation_job_status`.
+- Колекції повертаються сторінками: параметри `page` (1…100) і `limit` (1…100, за замовчуванням 20), тобто глибина не більше 10 000 записів, конверт відповіді `{items, page, limit, total}`.
 - Створення ресурсу повертає 201; заголовок `Location` повертається лише для ресурсів з операцією GET (`POST /courses`, `POST /attempts`) і для задачі генерації (202 на `GET …/generation-jobs/{jobId}`). `POST …/answers` повертає 200, оскільки повторне надсилання замінює відповідь на те саме питання; `POST …/events` повертає 200 з кількістю прийнятих і дубльованих подій. Повторний `DELETE` коду запрошення повертає 204: відкликаний код зберігається.
-- Помилки повертаються в одному форматі `application/problem+json` за RFC 9457 з полями `type`, `title`, `status`, `detail`, `instance`, `requestId` і масивом `errors` з JSON Pointer на поле запиту (табл. 2.14). Кожна операція документує 401 (крім публічних), 429, 500 і 503; операції з параметрами шляху або тілом — 400; операції з тілом — 413 і 415; коди 403, 404, 409 і 422 — відповідно до своєї логіки; для 429 і 503 передається заголовок `Retry-After`.
+- Помилки повертаються в одному форматі `application/problem+json` за RFC 9457 з полями `type`, `title`, `status`, `detail`, `instance`, `requestId` і масивом `errors` з JSON Pointer на поле запиту (табл. 2.15). Кожна операція документує 401 (крім публічних), 429, 500 і 503; операції з параметрами шляху або тілом — 400; операції з тілом — 413 і 415; коди 403, 404, 409 і 422 — відповідно до своєї логіки; для 429 і 503 передається заголовок `Retry-After`.
 - Розмір тіла обмежено на двох рівнях: Reverse Proxy відхиляє тіло понад 11 МБ (`request_body max_size`), Backend API — JSON понад 100 КБ і файл понад 10 МБ (413). Reverse Proxy стискає відповіді (gzip). CORS middleware не підключено, оскільки браузерного клієнта немає.
 
-Таблиця 2.13 – Групи операцій REST API
+Таблиця 2.14 – Групи операцій REST API
 
 | Група (тег) | Шляхи | Ролі | Вимоги |
 |---|---|---|---|
@@ -761,9 +834,9 @@ flowchart LR
 | Mock tests | `…/mock-tests`, `…/control-events/{controlEventId}/mock-test` | Публікація — owner, co_instructor; перелік — усі ролі | [SRS-FUN-34](./srs.md#srs-fun-34), [SRS-FUN-35](./srs.md#srs-fun-35) |
 | Monitoring | `…/heatmap`, `…/members/{userId}/mastery-confirmations/{topicId}` | owner, co_instructor | [SRS-FUN-46](./srs.md#srs-fun-46), [SRS-FUN-47](./srs.md#srs-fun-47) |
 
-Скорочення «…» у табл. 2.13 позначає префікс `/courses/{courseId}`; повний перелік операцій з методами, тілами і відповідями наведено в [api/openapi.yaml](./api/openapi.yaml).
+Скорочення «…» у табл. 2.14 позначає префікс `/courses/{courseId}`; повний перелік операцій з методами, тілами і відповідями наведено в [api/openapi.yaml](./api/openapi.yaml).
 
-Таблиця 2.14 – Каталог типів помилок (RFC 9457)
+Таблиця 2.15 – Каталог типів помилок (RFC 9457)
 
 | Код | Значення `type` | Умова |
 |---|---|---|
@@ -774,7 +847,7 @@ flowchart LR
 | 409 | `/problems/version-conflict`, `/problems/attempt-finished`, `/problems/already-member`, `/problems/idempotency-key-in-progress`, `/problems/attempt-in-progress`, `/problems/owner-has-courses` | Конфлікт зі станом ресурсу, зокрема розбіжність версії питання під час модерації; видалення облікового запису власника курсів; `attempt-in-progress` містить член-розширення `attemptId` для продовження спроби |
 | 413 | `/problems/payload-too-large` | Файл понад 10 МБ або JSON-тіло понад 100 КБ |
 | 415 | `/problems/unsupported-media-type` | Content-Type не відповідає операції; файл не є PDF за MIME-типом або сигнатурою `%PDF` |
-| 422 | `/problems/email-domain-not-allowed`, `/problems/pdf-no-text-layer`, `/problems/pdf-too-long`, `/problems/attempt-expired`, `/problems/option-not-in-question`, `/problems/invite-code-invalid`, `/problems/insufficient-question-pool`, `/problems/idempotency-key-mismatch`, `/problems/plan-empty` | Запит валідний за схемою, але порушує бізнес-правило |
+| 422 | `/problems/email-domain-not-allowed`, `/problems/pdf-no-text-layer`, `/problems/pdf-too-long`, `/problems/attempt-expired`, `/problems/option-not-in-question`, `/problems/invite-code-invalid`, `/problems/insufficient-question-pool`, `/problems/idempotency-key-mismatch`, `/problems/plan-empty`, `/problems/password-too-common` | Запит валідний за схемою, але порушує бізнес-правило |
 | 429 | `/problems/rate-limited`, `/problems/budget-exceeded` | Перевищено ліміт запитів ([SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08)) або добовий ліміт вартості генерації ([SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02)) |
 | 500 | `/problems/internal-error` | Непередбачена помилка; деталі — лише в журналі за `requestId` |
 | 503 | `/problems/service-unavailable` | PostgreSQL або Redis тимчасово недоступні |
@@ -823,9 +896,9 @@ flowchart LR
 
 ### 2.5.3. Карта інтерфейсних маршрутів системи
 
-Матриця (табл. 2.15) містить усі 47 операцій контракту [api/openapi.yaml](./api/openapi.yaml) в порядку їх опису і згенерована з контракту, тому збігається з ним за методом, шляхом, параметрами і межами значень. URI наведено відносно базового `https://{host}/api/v1`. Параметри шляху (`courseId`, `topicId`, `userId` тощо) — UUID і в графі «Вхідні параметри» не повторюються. Позначка `?` після імені поля — необов'язкове поле; іменовані типи (`ControlEventType`, `SourceTestStructureItem`, `AttemptEvent`, `QuestionOptionInput`) розкрито в `components.schemas` контракту. Усі маршрути, крім позначених «публічний», вимагають заголовка `Authorization: Bearer <access-токен>`. Усі операції обробляє контейнер Backend API (підрозділ 2.2.2); у графі «Обробник» наведено контролер з табл. 2.11. Generation Worker HTTP-запитів не приймає і виконує задачу, поставлену операцією API-REQ-33 (DF-01).
+Матриця (табл. 2.16) містить усі 47 операцій контракту [api/openapi.yaml](./api/openapi.yaml) в порядку їх опису і згенерована з контракту, тому збігається з ним за методом, шляхом, параметрами і межами значень. URI наведено відносно базового `https://{host}/api/v1`. Параметри шляху (`courseId`, `topicId`, `userId` тощо) — UUID і в графі «Вхідні параметри» не повторюються. Позначка `?` після імені поля — необов'язкове поле; іменовані типи (`ControlEventType`, `SourceTestStructureItem`, `AttemptEvent`, `QuestionOptionInput`) розкрито в `components.schemas` контракту. Усі маршрути, крім позначених «публічний», вимагають заголовка `Authorization: Bearer <access-токен>`. Усі операції обробляє контейнер Backend API (підрозділ 2.2.2); у графі «Обробник» наведено контролер з табл. 2.11. Generation Worker HTTP-запитів не приймає і виконує задачу, поставлену операцією API-REQ-33 (DF-01).
 
-Таблиця 2.15 – Карта інтерфейсних маршрутів системи
+Таблиця 2.16 – Карта інтерфейсних маршрутів системи
 
 | ID | Метод | URI | Вхідні параметри / Payload | Призначення | Доступ | Обробник у Backend API |
 |---|---|---|---|---|---|---|
@@ -841,29 +914,29 @@ flowchart LR
 | API-REQ-10 | POST | `/me/deletion` | body: `password`: string(1…128) | Видалення облікового запису після повторної автентифікації паролем | автентифікований | PrivacyController |
 | API-REQ-11 | GET | `/me/daily-plan` | — | Попередній перегляд плану на день | student | PlanController |
 | API-REQ-12 | POST | `/me/memberships` | body: `code`: string(8, A–Z без I, O і 2–9) | Приєднання до курсу за кодом запрошення | автентифікований | CourseController |
-| API-REQ-13 | GET | `/courses` | query `page`: integer(1…10000, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Курси поточного користувача | автентифікований | CourseController |
+| API-REQ-13 | GET | `/courses` | query `page`: integer(1…100, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Курси поточного користувача | автентифікований | CourseController |
 | API-REQ-14 | POST | `/courses` | body: `title`: string(1…200), `topics?`: {`title`: string(1…200)}[] (0…100) | Створення курсу з темами | автентифікований | CourseController |
 | API-REQ-15 | GET | `/courses/{courseId}` | — | Картка курсу | owner, co_instructor, student | CourseController |
 | API-REQ-16 | PATCH | `/courses/{courseId}` | body: `title`: string(1…200) | Зміна назви курсу | owner | CourseController |
 | API-REQ-17 | DELETE | `/courses/{courseId}` | — | Видалення курсу | owner | CourseController |
-| API-REQ-18 | GET | `/courses/{courseId}/members` | query `page`: integer(1…10000, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Учасники курсу | owner, co_instructor | CourseController |
+| API-REQ-18 | GET | `/courses/{courseId}/members` | query `page`: integer(1…100, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Учасники курсу | owner, co_instructor | CourseController |
 | API-REQ-19 | DELETE | `/courses/{courseId}/members/{userId}` | — | Виключення учасника | owner | CourseController |
-| API-REQ-20 | GET | `/courses/{courseId}/invite-codes` | query `page`: integer(1…10000, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Коди запрошення курсу | owner | CourseController |
+| API-REQ-20 | GET | `/courses/{courseId}/invite-codes` | query `page`: integer(1…100, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Коди запрошення курсу | owner | CourseController |
 | API-REQ-21 | POST | `/courses/{courseId}/invite-codes` | body: `role`: string(co_instructor|student), `expiresInDays?`: integer(1…30, за замовч. 7) | Створення коду запрошення | owner | CourseController |
 | API-REQ-22 | DELETE | `/courses/{courseId}/invite-codes/{inviteCodeId}` | — | Відкликання коду запрошення | owner | CourseController |
 | API-REQ-23 | GET | `/courses/{courseId}/topics` | — | Теми курсу | owner, co_instructor, student | CourseController |
 | API-REQ-24 | POST | `/courses/{courseId}/topics` | body: `title`: string(1…200), `position?`: integer(1…500) | Створення теми | owner, co_instructor | CourseController |
 | API-REQ-25 | PATCH | `/courses/{courseId}/topics/{topicId}` | body: (хоча б одне поле) `title?`: string(1…200), `position?`: integer(1…500) | Зміна теми | owner, co_instructor | CourseController |
-| API-REQ-26 | GET | `/courses/{courseId}/control-events` | query `page`: integer(1…10000, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Контрольні заходи курсу | owner, co_instructor, student | CourseController |
+| API-REQ-26 | GET | `/courses/{courseId}/control-events` | query `page`: integer(1…100, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Контрольні заходи курсу | owner, co_instructor, student | CourseController |
 | API-REQ-27 | POST | `/courses/{courseId}/control-events` | body: `type`: ControlEventType, `eventDate`: string(date), `topicIds`: string(uuid)[] (1…100, унікальні) | Створення контрольного заходу | owner, co_instructor | CourseController |
 | API-REQ-28 | PATCH | `/courses/{courseId}/control-events/{controlEventId}` | body: (хоча б одне поле) `type?`: ControlEventType, `eventDate?`: string(date), `topicIds?`: string(uuid)[] (1…100, унікальні) | Зміна контрольного заходу | owner, co_instructor | CourseController |
-| API-REQ-29 | GET | `/courses/{courseId}/lecture-materials` | query `page`: integer(1…10000, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Лекційні матеріали курсу | owner, co_instructor | CourseController |
+| API-REQ-29 | GET | `/courses/{courseId}/lecture-materials` | query `page`: integer(1…100, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Лекційні матеріали курсу | owner, co_instructor | CourseController |
 | API-REQ-30 | POST | `/courses/{courseId}/topics/{topicId}/lecture-materials` | multipart: `file`: string(binary, ≤ 10 МБ) | Завантаження PDF лекції до теми | owner, co_instructor | CourseController |
-| API-REQ-31 | GET | `/courses/{courseId}/source-tests` | query `page`: integer(1…10000, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Зразки тестів курсу | owner, co_instructor | CourseController |
+| API-REQ-31 | GET | `/courses/{courseId}/source-tests` | query `page`: integer(1…100, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Зразки тестів курсу | owner, co_instructor | CourseController |
 | API-REQ-32 | POST | `/courses/{courseId}/control-events/{controlEventId}/source-tests` | multipart: `file`: string(binary, ≤ 10 МБ), `timeLimitMinutes`: integer(1…240), `structure`: SourceTestStructureItem[] (1…200) | Завантаження PDF зразка тесту | owner, co_instructor | CourseController |
 | API-REQ-33 | POST | `/courses/{courseId}/generation-jobs` | header `Idempotency-Key`: string(uuid); body: `type`: string(lecture_test), `lectureMaterialId`: string(uuid) **або** `type`: string(mock_questions), `sourceTestId`: string(uuid) | Постановка задачі генерації в чергу (виконує Generation Worker, DF-01) | owner, co_instructor | GenerationController |
 | API-REQ-34 | GET | `/courses/{courseId}/generation-jobs/{jobId}` | — | Стан задачі генерації | owner, co_instructor | GenerationController |
-| API-REQ-35 | GET | `/courses/{courseId}/questions` | query `page`: integer(1…10000, за замовч. 1); query `limit`: integer(1…100, за замовч. 20); query `status`: QuestionStatus(за замовч. draft); query `topicId`: string(uuid); query `generationJobId`: string(uuid) | Питання курсу з фільтрами за статусом, темою, задачею | owner, co_instructor | ModerationController |
+| API-REQ-35 | GET | `/courses/{courseId}/questions` | query `page`: integer(1…100, за замовч. 1); query `limit`: integer(1…100, за замовч. 20); query `status`: QuestionStatus(за замовч. draft); query `topicId`: string(uuid); query `generationJobId`: string(uuid) | Питання курсу з фільтрами за статусом, темою, задачею | owner, co_instructor | ModerationController |
 | API-REQ-36 | PATCH | `/courses/{courseId}/questions/{questionId}` | body: (не менше 2 полів) `version`: integer(≥ 1), `topicId?`: string(uuid), `type?`: QuestionType, `stem?`: string(1…2000), `explanation?`: string(≤ 2000), `options?`: QuestionOptionInput[] (2…8) | Редагування чернетки | owner, co_instructor | ModerationController |
 | API-REQ-37 | POST | `/courses/{courseId}/questions/{questionId}/approval` | body: `version`: integer(≥ 1) | Схвалення чернетки | owner, co_instructor | ModerationController |
 | API-REQ-38 | POST | `/courses/{courseId}/questions/{questionId}/rejection` | body: `version`: integer(≥ 1), `reason`: string(1…500) | Відхилення чернетки | owner, co_instructor | ModerationController |
@@ -872,9 +945,9 @@ flowchart LR
 | API-REQ-41 | POST | `/attempts/{attemptId}/answers` | body: `questionId`: string(uuid), `optionIds`: string(uuid)[] (1…8, унікальні) | Фіксація відповіді | student | AttemptController |
 | API-REQ-42 | POST | `/attempts/{attemptId}/completion` | — | Завершення спроби, оновлення ReviewState | student | AttemptController |
 | API-REQ-43 | POST | `/attempts/{attemptId}/events` | body: `events`: AttemptEvent[] (1…100) | Пакет подій антисписування | student | AntiCheatController |
-| API-REQ-44 | GET | `/courses/{courseId}/mock-tests` | query `page`: integer(1…10000, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Опубліковані пробні тести | owner, co_instructor, student | MockTestController |
+| API-REQ-44 | GET | `/courses/{courseId}/mock-tests` | query `page`: integer(1…100, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Опубліковані пробні тести | owner, co_instructor, student | MockTestController |
 | API-REQ-45 | PUT | `/courses/{courseId}/control-events/{controlEventId}/mock-test` | body: `sourceTestId`: string(uuid) | Публікація пробного тесту за зразком | owner, co_instructor | MockTestController |
-| API-REQ-46 | GET | `/courses/{courseId}/heatmap` | query `page`: integer(1…10000, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Теплова карта засвоєння | owner, co_instructor | MonitoringController |
+| API-REQ-46 | GET | `/courses/{courseId}/heatmap` | query `page`: integer(1…100, за замовч. 1); query `limit`: integer(1…100, за замовч. 20) | Теплова карта засвоєння | owner, co_instructor | MonitoringController |
 | API-REQ-47 | PUT | `/courses/{courseId}/members/{userId}/mastery-confirmations/{topicId}` | — | Підтвердження засвоєння теми | owner, co_instructor | MonitoringController |
 
 Поза контрактом REST залишається `GET /health` (HealthController, табл. 2.11): Reverse Proxy цей шлях не публікує, його викликає лише healthcheck docker-compose у внутрішній мережі, тому анонімний доступ ззовні до стану PostgreSQL і Redis відсутній.
@@ -883,7 +956,7 @@ flowchart LR
 
 Потоки даних описують мережевий шлях критичних запитів від Mobile App до сховищ і зовнішніх систем. Спільні для всіх потоків кроки мережевого рівня такі:
 - **Транспорт.** Mobile App звертається до `https://{host}/api/v1/…`; Reverse Proxy (Caddy) термінує TLS 1.2+, відхиляє тіло понад 11 МБ, стискає відповіді gzip, додає `X-Forwarded-For` і передає запит до Backend API у внутрішній мережі docker-compose ([SRS-NFR-SEC-06](./srs.md#srs-nfr-sec-06)). Журнал доступу Reverse Proxy записує шлях без query-рядка.
-- **Конвеєр middleware** (рис. 2.3): RequestContext присвоює `requestId`; SecurityHeaders додає заголовки helmet; IpRateLimiter рахує ліміти публічних операцій за IP клієнта (Express `trust proxy` = 1); BodyParser приймає JSON ≤ 100 КБ з `Content-Type: application/json` (інакше 413 або 415); JwtAuthMiddleware перевіряє підпис, `alg`, `exp` і `iss` access-токена (інакше 401); UserRateLimiter рахує 100 запитів/хв за `sub` перевіреного токена (інакше 429); CourseRoleGuard перевіряє формат `courseId` (інакше 400) і роль у курсі (інакше 403); ValidationMiddleware перевіряє тіло, параметри і query схемою zod (інакше 400). Logger приховує заголовок Authorization, паролі й токени ([SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01)).
+- **Конвеєр middleware** (рис. 2.3): RequestContext присвоює `requestId`; SecurityHeaders додає заголовки helmet і `Cache-Control: no-store`; IpRateLimiter рахує глобальний ліміт 300 запитів/хв і ліміти публічних операцій за IP клієнта (Express `trust proxy` = 1); BodyParser приймає JSON ≤ 100 КБ з `Content-Type: application/json` (інакше 413 або 415); JwtAuthMiddleware перевіряє підпис, `alg` (лише HS256) і claims `sub`, `iss`, `aud`, `iat`, `exp` access-токена (інакше 401); UserRateLimiter рахує 100 запитів/хв за `sub` перевіреного токена (інакше 429); CourseRoleGuard перевіряє формат `courseId` (інакше 400) і роль у курсі (інакше 403); ValidationMiddleware перевіряє тіло, параметри і query схемою zod у режимі `.strict()` (інакше 400). Logger приховує заголовок Authorization, паролі й токени ([SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01)).
 - **CORS.** CORS middleware не підключено, оскільки браузерного клієнта немає: браузер блокує крос-доменні запити, а Socket.io створюється з `cors: false`.
 
 **DF-01. Завантаження PDF лекції і генерація чернеток питань (UC-02).**
@@ -911,7 +984,7 @@ flowchart LR
 2. IpRateLimiter обмежує 5 запитів/год на IP, AuthService — 5 запитів/год на поштову адресу (інакше 429 з Retry-After).
 3. AuthService для наявного облікового запису з підтвердженою поштою анулює попередні невикористані токени, генерує 32 випадкові байти, зберігає хеш SHA-256 і після відповіді надсилає лист через SMTP (тайм-аут 10 с). Відповідь 202 однакова за вмістом і часом для наявної і відсутньої адреси.
 4. Користувач відкриває universal link `https://{host}/reset-password#token=…`. Токен міститься у фрагменті URL, який не надсилається на сервер, тому не потрапляє в журнал доступу Reverse Proxy і в заголовок `Referer`; статична сторінка для комп'ютера віддається з `Referrer-Policy: no-referrer`.
-5. Mobile App надсилає `POST /api/v1/auth/password-reset/confirm` (API-REQ-08) з тілом `{token, newPassword}`; IpRateLimiter обмежує 60 запитів/год на IP. AuthService у транзакції перевіряє хеш токена, строк дії і `used_at`, змінює пароль, позначає токен використаним і відкликає всі refresh-токени користувача; відповідь 204. Уже видані access-токени діють до закінчення строку (до 15 хв): цей ризик прийнято, оскільки відкликання access-токенів потребувало б перевірки стану на кожному запиті.
+5. Mobile App надсилає `POST /api/v1/auth/password-reset/confirm` (API-REQ-08) з тілом `{token, newPassword}`; IpRateLimiter обмежує 60 запитів/год на IP. AuthService у транзакції перевіряє хеш токена, строк дії і `used_at`, відхиляє пароль з переліку поширених (422 `password-too-common`), змінює пароль, позначає токен використаним і відкликає всі refresh-токени користувача; відповідь 204. Уже видані access-токени діють до закінчення строку (до 15 хв): цей ризик прийнято, оскільки відкликання access-токенів потребувало б перевірки стану на кожному запиті.
 
 Протокол аудиту матриці і потоків даних — [17-AI Insights.md](./17-AI%20Insights.md), Запис 23.
 
@@ -927,7 +1000,7 @@ flowchart LR
 
 ### 2.6.1. UC-01. Пройти тест за планом на день
 
-Таблиця 2.16 – Специфікація прецедента UC-01
+Таблиця 2.17 – Специфікація прецедента UC-01
 
 | Атрибут | Значення |
 |---|---|
@@ -940,7 +1013,7 @@ flowchart LR
 | Мінімальні гарантії | ReviewState змінюється лише разом із завершенням спроби в одній транзакції; зафіксовані відповіді не втрачаються; незавершена спроба завершується автоматично не пізніше ніж через 1 хв після `deadline_at`; повторні запити не створюють дублікатів відповідей і повторного перерахунку |
 | Зв'язки на діаграмі | «include» «Завершити спробу й оновити план SM-2» — крок 4; «extend» «Продовжити незавершену спробу» — точка «є незавершена спроба», крок 2 (AF-01A); «extend» «Завершити спробу за таймером» — точка «ліміт часу минув», кроки 3–4 (AF-01D); «extend» «Зафіксувати вихід із застосунку» — точка «застосунок перейшов у фон», кроки 3–4 ([SRS-FUN-37](./srs.md#srs-fun-37)) |
 
-Таблиця 2.17 – Основний сценарій UC-01
+Таблиця 2.18 – Основний сценарій UC-01
 
 | Крок | Дія актора | Реакція та відповідь системи |
 |---|---|---|
@@ -950,7 +1023,7 @@ flowchart LR
 | 4 | Завершує спробу | `POST /attempts/{attemptId}/completion`, транзакція алгоритму 2.8.1: `SELECT … FOR UPDATE` спроби (завершена → збережений результат без перерахунку); для кожної теми q за табл. А.1 [srs.md](./srs.md) (питання без відповіді — неправильні, [SRS-FUN-17](./srs.md#srs-fun-17)), `SELECT … FOR UPDATE` і UPSERT `review_states` за SM-2 (EF ≥ 1,30; при q < 3 EF не змінюється); `status := 'finished'` (`'expired'`, якщо `now > deadline_at`); COMMIT. 200 — результат за темами: `quality`, `ef`, `intervalDays`, `nextReview` |
 | 5 | Переглядає результат | Клієнт показує розбивку за темами з відповіді кроку 4; повторний перегляд — `GET /attempts/{attemptId}` |
 
-Таблиця 2.18 – Альтернативні потоки UC-01
+Таблиця 2.19 – Альтернативні потоки UC-01
 
 | ID | Старт із кроку | Умова-тригер | Покроковий алгоритм обробки | Повернення |
 |---|---|---|---|---|
@@ -961,7 +1034,7 @@ flowchart LR
 | AF-01E | 4 | Частина питань без відповіді | 1) Клієнт показує кількість питань без відповіді і попереджає, що вони зараховуються як неправильні. 2) Студент повертається до питань або підтверджує завершення | Крок 3 або крок 4 |
 | AF-01F | 3 | Студента вилучено з курсу або питання відхилено модератором під час спроби | 1) Склад спроби зафіксовано в `attempt_questions`: відповіді приймаються і враховуються в ReviewState студента. 2) Подія прогресу публікується в кімнату курсу без змін | Крок 3 |
 
-Таблиця 2.19 – Потоки виключень UC-01
+Таблиця 2.20 – Потоки виключень UC-01
 
 | ID | Назва збою | Умова тригеру | Дії для UI / користувача | Технічні дії сервера та БД |
 |---|---|---|---|---|
@@ -972,7 +1045,7 @@ flowchart LR
 
 ### 2.6.2. UC-02. Згенерувати чернетки питань за лекцією
 
-Таблиця 2.20 – Специфікація прецедента UC-02
+Таблиця 2.21 – Специфікація прецедента UC-02
 
 | Атрибут | Значення |
 |---|---|
@@ -985,7 +1058,7 @@ flowchart LR
 | Мінімальні гарантії | Кожен виклик Claude API враховано в `cost_usd`; повторна доставка задачі не створює дублікатів чернеток; задача завершується станом done або dead і не залишається в queued довше 2 хв (узгодження задачею `maintenance`); студенти не бачать чернеток до схвалення ([SRS-FUN-29](./srs.md#srs-fun-29)) |
 | Зв'язки на діаграмі | «include» «Поставити задачу генерації в чергу» — крок 1; «extend» «Повторити генерацію після збою» — точка «задача dead або чернетки відхилено», після кроку 4 (AF-02D) |
 
-Таблиця 2.21 – Основний сценарій UC-02
+Таблиця 2.22 – Основний сценарій UC-02
 
 | Крок | Дія актора | Реакція та відповідь системи |
 |---|---|---|
@@ -995,7 +1068,7 @@ flowchart LR
 | 4 | Отримує сповіщення | JobEventsListener у Backend API отримує QueueEvents completed і через ProgressPublisher надсилає `generation.done` у персональну кімнату `user:{requested_by}` ([SRS-FUN-30](./srs.md#srs-fun-30)). Доставка best-effort: якщо подія не надійшла за 90 с, клієнт раз на 15 с запитує `GET /courses/{courseId}/generation-jobs/{jobId}` ([SRS-FUN-52](./srs.md#srs-fun-52)) |
 | 5 | Відкриває чернетки | `GET /courses/{courseId}/questions?status=draft`: чернетки доступні всім owner і co-instructor курсу; далі — прецедент «Модерувати чернетки питань» |
 
-Таблиця 2.22 – Альтернативні потоки UC-02
+Таблиця 2.23 – Альтернативні потоки UC-02
 
 | ID | Старт із кроку | Умова-тригер | Покроковий алгоритм обробки | Повернення |
 |---|---|---|---|---|
@@ -1005,7 +1078,7 @@ flowchart LR
 | AF-02D | 4 | Задача в стані dead або всі чернетки відхилено модератором | 1) Викладач запускає генерацію повторно. 2) `generation_no` збільшується на 1, утворюється новий `idempotency_key` і нова задача ([SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02)) | Крок 1 |
 | AF-02E | 2 | Файл лекції видалено, поки задача була в черзі | 1) Worker отримує порожній текст джерела → неповторювана помилка `source-empty`, стан dead без виклику Claude API. 2) Подія `generation.dead` ініціатору | Завершення прецедента |
 
-Таблиця 2.23 – Потоки виключень UC-02
+Таблиця 2.24 – Потоки виключень UC-02
 
 | ID | Назва збою | Умова тригеру | Дії для UI / користувача | Технічні дії сервера та БД |
 |---|---|---|---|---|
@@ -1016,7 +1089,7 @@ flowchart LR
 
 ### 2.6.3. UC-03. Відновити пароль
 
-Таблиця 2.24 – Специфікація прецедента UC-03
+Таблиця 2.25 – Специфікація прецедента UC-03
 
 | Атрибут | Значення |
 |---|---|
@@ -1029,7 +1102,7 @@ flowchart LR
 | Мінімальні гарантії | Відповідь на запит не розкриває існування облікового запису ні вмістом, ні часом відповіді; токен зберігається лише як хеш SHA-256; зміна пароля, анулювання токена і відкликання сесій атомарні; невдала спроба не змінює пароль |
 | Зв'язки на діаграмі | «include» «Надіслати службовий лист» — крок 1; після кроку 4 — перехід до прецедента «Увійти в систему» |
 
-Таблиця 2.25 – Основний сценарій UC-03
+Таблиця 2.26 – Основний сценарій UC-03
 
 | Крок | Дія актора | Реакція та відповідь системи |
 |---|---|---|
@@ -1038,7 +1111,7 @@ flowchart LR
 | 3 | Вводить новий пароль і підтверджує | `POST /auth/password-reset/confirm`: IpRateLimiter (60 запитів/год на IP); валідація пароля (10…128). AuthService у транзакції: `SELECT … FOR UPDATE` токена за `token_hash`; перевірка `expires_at > now` і `used_at IS NULL`; новий хеш Argon2id ([SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03)); UPDATE `users.password_hash`; `used_at := now`; відкликання всіх `refresh_tokens` користувача; INSERT `audit_log` (`password_reset`); COMMIT. 204 |
 | 4 | Переходить до входу | Клієнт відкриває екран входу з введеною поштою; токени видаються в прецеденті «Увійти в систему» |
 
-Таблиця 2.26 – Альтернативні потоки UC-03
+Таблиця 2.27 – Альтернативні потоки UC-03
 
 | ID | Старт із кроку | Умова-тригер | Покроковий алгоритм обробки | Повернення |
 |---|---|---|---|---|
@@ -1048,7 +1121,7 @@ flowchart LR
 | AF-03D | 1 або 3 | Перевищено ліміт запитів | 429 `rate-limited` з Retry-After; клієнт показує час повтору | Крок 1 після Retry-After |
 | AF-03E | 2 | Лист відкрито на комп'ютері | Статична сторінка за посиланням (Reverse Proxy, заголовок `Referrer-Policy: no-referrer`, без сторонніх ресурсів) просить відкрити лист на телефоні з установленим застосунком; фрагмент `#token=…` на сервер не надходить і сторінкою не обробляється | Крок 2 |
 
-Таблиця 2.27 – Потоки виключень UC-03
+Таблиця 2.28 – Потоки виключень UC-03
 
 | ID | Назва збою | Умова тригеру | Дії для UI / користувача | Технічні дії сервера та БД |
 |---|---|---|---|---|
@@ -1063,12 +1136,12 @@ flowchart LR
 Правила, спільні для всіх таблиць:
 - первинні ключі — `uuid DEFAULT gen_random_uuid()`, крім таблиць зв'язку зі складеними ключами;
 - часові мітки — `timestamptz` (UTC), календарні дати контрольних заходів і повторень — `date`;
-- статуси, ролі й типи — ENUM-типи PostgreSQL (табл. 2.28), значення яких збігаються з enum у контракті API (підрозділ 2.5);
+- статуси, ролі й типи — ENUM-типи PostgreSQL (табл. 2.29), значення яких збігаються з enum у контракті API (підрозділ 2.5);
 - зовнішні ключі — `ON DELETE RESTRICT`, крім дочірніх записів складу (позначено CASCADE); облікові записи не видаляються фізично: видалення за [SRS-FUN-48](./srs.md#srs-fun-48) встановлює `deleted_at` і знеособлює `email` і `display_name`, а відповіді зберігаються для агрегатів курсу;
 - складені зовнішні ключі з `course_id` унеможливлюють зв'язок об'єктів різних курсів (тема контрольного заходу, тема матеріалу, тема питання);
 - суми в USD — `numeric(10,4)`, коефіцієнт легкості — `numeric(3,2)`; типи з плаваючою комою не використовуються.
 
-Таблиця 2.28 – ENUM-типи схеми даних
+Таблиця 2.29 – ENUM-типи схеми даних
 
 | Тип | Значення | Використання |
 |---|---|---|
@@ -1364,9 +1437,9 @@ erDiagram
 
 ### 2.7.1. Специфікація таблиць
 
-Специфікацію таблиць наведено в табл. 2.29. Для кожної таблиці вказано поля, що не повторюють загальних правил: `id`, `created_at`, `updated_at` мають тип і обмеження, наведені вище.
+Специфікацію таблиць наведено в табл. 2.30. Для кожної таблиці вказано поля, що не повторюють загальних правил: `id`, `created_at`, `updated_at` мають тип і обмеження, наведені вище.
 
-Таблиця 2.29 – Специфікація таблиць схеми даних
+Таблиця 2.30 – Специфікація таблиць схеми даних
 
 | Таблиця | Поле | Тип | Обмеження | Опис |
 |---|---|---|---|---|
@@ -1384,7 +1457,7 @@ erDiagram
 | refresh_tokens | user_id | uuid | FK → users, CASCADE | Власник |
 | refresh_tokens | family_id | uuid | NOT NULL | Сімейство токенів однієї сесії: відкликання при виході ([SRS-FUN-53](./srs.md#srs-fun-53)) і при повторному використанні ([SRS-NFR-SEC-02](./srs.md#srs-nfr-sec-02)) |
 | refresh_tokens | token_hash | bytea | NOT NULL, UNIQUE, CHECK (octet_length = 32) | SHA-256 від refresh-токена |
-| refresh_tokens | expires_at, revoked_at | timestamptz | expires_at = created_at + 30 днів; revoked_at NULL | Строк дії і відкликання |
+| refresh_tokens | expires_at, revoked_at | timestamptz | expires_at = час входу + 30 днів, під час ротації успадковується від попереднього токена; revoked_at NULL | Строк дії і відкликання |
 | refresh_tokens | replaced_by | uuid | FK → refresh_tokens, NULL | Наступний токен після ротації |
 | courses | title | varchar(200) | NOT NULL | Назва дисципліни ([SRS-FUN-07](./srs.md#srs-fun-07)) |
 | courses | created_by | uuid | FK → users | Автор курсу (отримує роль owner) |
@@ -1447,9 +1520,9 @@ erDiagram
 
 ### 2.7.2. План індексів
 
-Індекси первинних ключів і обмежень UNIQUE створюються автоматично; у табл. 2.30 наведено індекси, що прискорюють запити критичних сценаріїв. Тип — B-Tree, якщо не вказано інше.
+Індекси первинних ключів і обмежень UNIQUE створюються автоматично; у табл. 2.31 наведено індекси, що прискорюють запити критичних сценаріїв. Тип — B-Tree, якщо не вказано інше.
 
-Таблиця 2.30 – План індексів
+Таблиця 2.31 – План індексів
 
 | Індекс | Таблиця (поля) | Тип | Запит, який прискорює | SRS-ID |
 |---|---|---|---|---|
@@ -1485,9 +1558,9 @@ erDiagram
 
 Формалізовано три алгоритми, від яких залежать коректність навчальної моделі і вартість експлуатації: оновлення стану SM-2 після завершення спроби (компонент SM2Calculator, підрозділ 2.3), формування персонального плану на день (DailyPlanPrioritizer) і обробка задачі генерації worker-процесом (Generation Worker, ADR-001). Протокол нормоконтролю алгоритмів — [17-AI Insights.md](./17-AI%20Insights.md), Запис 19.
 
-Правила запису: `:=` — присвоювання; `=`, `≠`, `<`, `≤`, `>`, `≥` — порівняння; складені умови поєднуються операторами AND, OR, NOT; елементи колекцій позначаються індексами `T[i]`, `Cand[j]`, `Items[i]`; `|X|` — потужність множини або довжина рядка; `⌈x⌉` — округлення вгору; NULL — відсутнє значення. Поточна дата `today := Date(now, Europe/Kyiv)`. Блок-схеми виконано кодом Mermaid.js (`flowchart TD`) з позначеннями блоків за ДСТУ 19.701 (табл. 2.31).
+Правила запису: `:=` — присвоювання; `=`, `≠`, `<`, `≤`, `>`, `≥` — порівняння; складені умови поєднуються операторами AND, OR, NOT; елементи колекцій позначаються індексами `T[i]`, `Cand[j]`, `Items[i]`; `|X|` — потужність множини або довжина рядка; `⌈x⌉` — округлення вгору; NULL — відсутнє значення. Поточна дата `today := Date(now, Europe/Kyiv)`. Блок-схеми виконано кодом Mermaid.js (`flowchart TD`) з позначеннями блоків за ДСТУ 19.701 (табл. 2.32).
 
-Таблиця 2.31 – Відповідність блоків блок-схем ДСТУ 19.701 і синтаксису Mermaid.js
+Таблиця 2.32 – Відповідність блоків блок-схем ДСТУ 19.701 і синтаксису Mermaid.js
 
 | Блок ДСТУ 19.701 | Призначення | Синтаксис Mermaid.js |
 |---|---|---|
@@ -1671,9 +1744,9 @@ flowchart TD
 
 ## 2.9. Інтеграційний аудит та висновок про готовність архітектури
 
-Схему даних (підрозділ 2.7), контракт API (підрозділ 2.5) і алгоритми (підрозділ 2.8) звірено двома способами: скриптом, що порівнює ENUM-типи, типи і межі полів, атрибути алгоритмів і трасування SRS-FUN між `2_design.md`, `api/openapi.yaml` і `srs.md`, та наскрізним аудитом за промптом «Data & Logic Gatekeeper» методички. Протокол аудиту і рішення автора щодо зауважень I-01…I-11 — [17-AI Insights.md](./17-AI%20Insights.md), Запис 20. Результати наведено в табл. 2.32.
+Схему даних (підрозділ 2.7), контракт API (підрозділ 2.5) і алгоритми (підрозділ 2.8) звірено двома способами: скриптом, що порівнює ENUM-типи, типи і межі полів, атрибути алгоритмів і трасування SRS-FUN між `2_design.md`, `api/openapi.yaml` і `srs.md`, та наскрізним аудитом за промптом «Data & Logic Gatekeeper» методички. Протокол аудиту і рішення автора щодо зауважень I-01…I-11 — [17-AI Insights.md](./17-AI%20Insights.md), Запис 20. Результати наведено в табл. 2.33.
 
-Таблиця 2.32 – Звіт про готовність специфікацій до реалізації (Production Readiness Report)
+Таблиця 2.33 – Звіт про готовність специфікацій до реалізації (Production Readiness Report)
 
 | Перевірка | Результат | Виправлення |
 |---|---|---|

@@ -19,6 +19,8 @@
 
 Навіщо: демонструє інженерну культуру (Conventional Commits + CI), пряма вимога рубрики ЛР№1 щодо "історії комітів, що демонструє культуру роботи з Git".
 
+Цільовий конвеєр (оновлено 24.11.2026, підрозділ 2.4 [2_design.md](../2_design.md)): кожен Pull Request блокується, якщо не пройдено `npm ci` за lock-файлом, лінт, тести, `npm audit --audit-level=high`, Trivy для образів (Critical/High) зі SBOM CycloneDX, Quality Gate SonarQube Cloud і gitleaks; GitHub Actions закріплено за SHA, `GITHUB_TOKEN` має мінімальні `permissions`, оновлення залежностей пропонує Dependabot ([SRS-NFR-SEC-09](../srs.md#srs-nfr-sec-09)…[SRS-NFR-SEC-11](../srs.md#srs-nfr-sec-11), [SRS-NFR-SEC-13](../srs.md#srs-nfr-sec-13)). Чинний `ci.yml` містить лише встановлення залежностей, лінт і тести; доповнення — задача етапу реалізації ([[13-TBD відкриті питання]]).
+
 ## Черга повідомлень — Redis + BullMQ
 
 Детальний опис використання — [[08-Сценарний тренажер#Конвеєр генерації та курації контенту]].
@@ -35,7 +37,12 @@
 - Одноразовий сервіс `migrate` (Kysely Migrator) запускається до backend і worker (`depends_on: condition: service_completed_successfully`); міграції сумісні з попередньою версією коду
 - `UV_THREADPOOL_SIZE=4` для Backend API (Argon2id); вилучення тексту PDF — у `worker_threads`
 - Healthcheck: backend — PostgreSQL (стан Redis у полі `queue`), worker — PostgreSQL і Redis; контейнери зі статусом unhealthy автоматично не перезапускаються (поза MVP)
-- Backup Job: щоденний pg_dump і архів тому File Storage на окремий фізичний носій, зберігання 7 днів
+- Backup Job: щоденний pg_dump і архів тому File Storage, зашифровані утилітою `age`, на окремий фізичний носій, зберігання 7 днів
+- Мережа (оновлено 24.11.2026, підрозділ 2.4 [2_design.md](../2_design.md)): назовні опубліковано лише порт 443 Reverse Proxy; backend, worker, PostgreSQL і Redis без `ports`; сертифікат — ACME TLS-ALPN-01; Redis з `requirepass` і ACL-користувачем
+- Секрети (`JWT_SECRET`, паролі PostgreSQL і Redis, `ANTHROPIC_API_KEY`, облікові дані SMTP) — Docker secrets; значень за замовчуванням немає ([SRS-NFR-SEC-13](../srs.md#srs-nfr-sec-13))
+- Ролі PostgreSQL: `recall_migrator` (DDL, сервіс `migrate`), `recall_app` (DML для backend; `audit_log` — лише INSERT і SELECT), `recall_worker` (DML на таблиці генерації)
+- Контейнери: непривілейований користувач, `read_only: true` з tmpfs для тимчасових файлів, `security_opt: no-new-privileges`, `cap_drop: ALL`, `pids_limit`; образи закріплено за digest; журнали — драйвер `json-file` з `max-size: 10m`, `max-file: 5`
+- Чинний `docker-compose.yml` відкриває порти 3000, 5432 і 6379, не містить Reverse Proxy і задає `JWT_SECRET` за замовчуванням; приведення до цільової конфігурації — задача етапу реалізації ([[13-TBD відкриті питання]])
 - CI: dependency-cruiser перевіряє правило залежностей шарів і межі модулів
 - Reverse Proxy (Caddy): `request_body max_size 11MB`, стиснення відповідей `encode gzip`, журнал доступу без query-рядка; шлях `/health` назовні не публікується (healthcheck docker-compose звертається до backend у внутрішній мережі); статичні сторінки universal link віддаються з `Referrer-Policy: no-referrer`
 - Backend API: `trust proxy` = 1 (довіра лише Reverse Proxy для `X-Forwarded-For`)
