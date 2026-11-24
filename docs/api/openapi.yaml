@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Recall REST API
   version: 1.0.0
-  description: Контракт REST API системи Recall (Розділ 2, підрозділ 2.5). Автентифікація — JWT Bearer (access 15 хв, refresh 30 днів з ротацією). Помилки — application/problem+json (RFC 9457). Ідентифікатори в шляху — лише UUID. Пагінація — page і limit (limit ≤ 100). Токени і паролі не передаються в query. Розширення x-srs і x-roles містять трасування до SRS і ролі в курсі для матриці маршрутів.
+  description: Контракт REST API системи Recall (Розділ 2, підрозділ 2.5). Автентифікація — JWT Bearer (access 15 хв, refresh 30 днів з ротацією). Помилки — application/problem+json (RFC 9457). Ідентифікатори в шляху — лише UUID. Пагінація — page і limit (limit ≤ 100). Токени і паролі не передаються в query; одноразові токени з листів передаються у фрагменті посилання (#token=…), який не надсилається на сервер. Ліміт JSON-тіла 100 КБ, файлу 10 МБ. Location повертається лише для ресурсів з операцією GET. Розширення x-srs і x-roles містять трасування до SRS і ролі в курсі для матриці маршрутів.
   license:
     name: Proprietary — дипломний проєкт
     url: https://github.com/MarcoGr11/Recall
@@ -41,10 +41,11 @@ paths:
         - Auth
       operationId: registerUser
       summary: Реєстрація за корпоративною поштою
-      description: Створює обліковий запис з непідтвердженою поштою і надсилає лист з посиланням підтвердження (строк дії 24 год). Пароль хешується Argon2id.
+      description: "Для нової адреси створює обліковий запис з непідтвердженою поштою і надсилає лист з посиланням підтвердження (строк дії 24 год); пароль хешується Argon2id. Для вже зареєстрованої адреси обліковий запис не змінюється, а на адресу надсилається лист «обліковий запис уже існує» з посиланням на відновлення пароля. Відповідь завжди 202, лист надсилається після відповіді: ні код, ні час відповіді не розкривають існування облікового запису (захист від user enumeration, OWASP A07:2021)."
       x-srs:
         - SRS-FUN-01
         - SRS-NFR-SEC-03
+        - SRS-NFR-SEC-08
       security: []
       requestBody:
         required: true
@@ -57,25 +58,14 @@ paths:
               password: Kv9#plume-river
               displayName: Олена Коваль
       responses:
-        "201":
-          description: Обліковий запис створено; лист підтвердження надіслано.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/UserProfile"
-              example:
-                id: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
-                email: o.koval@chnu.edu.ua
-                displayName: Олена Коваль
-                emailVerified: false
-                createdAt: "2026-11-24T09:15:00Z"
-          headers:
-            Location:
-              $ref: "#/components/headers/Location"
+        "202":
+          description: Запит прийнято; лист надіслано на вказану адресу.
         "400":
           $ref: "#/components/responses/BadRequest"
-        "409":
-          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
         "429":
@@ -90,9 +80,10 @@ paths:
         - Auth
       operationId: verifyEmail
       summary: Підтвердження пошти
-      description: Підтверджує пошту одноразовим токеном з листа; токен анулюється після використання.
+      description: Підтверджує пошту одноразовим токеном з фрагмента посилання в листі (https://{host}/verify-email#token=…); токен анулюється після використання.
       x-srs:
         - SRS-FUN-01
+        - SRS-NFR-SEC-08
       security: []
       requestBody:
         required: true
@@ -107,6 +98,10 @@ paths:
           description: Пошту підтверджено.
         "400":
           $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -137,6 +132,10 @@ paths:
           description: Запит прийнято.
         "400":
           $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -149,7 +148,7 @@ paths:
         - Auth
       operationId: login
       summary: Вхід
-      description: Автентифікує користувача з підтвердженою поштою і видає пару токенів. Невірна пошта і невірний пароль не розрізняються у відповіді.
+      description: Автентифікує користувача з підтвердженою поштою і видає пару токенів. Невірна пошта і невірний пароль не розрізняються у відповіді; 403 email-not-verified повертається лише після перевірки правильного пароля. Для відсутньої адреси виконується хешування фіктивного пароля, тому час відповіді не розкриває існування облікового запису.
       x-srs:
         - SRS-FUN-02
         - SRS-NFR-SEC-01
@@ -183,6 +182,10 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -198,6 +201,7 @@ paths:
       description: Видає нову пару токенів і анулює поданий refresh-токен. Повторне використання анульованого токена відкликає всі токени сімейства.
       x-srs:
         - SRS-NFR-SEC-02
+        - SRS-NFR-SEC-08
       security: []
       requestBody:
         required: true
@@ -224,6 +228,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -236,7 +244,7 @@ paths:
         - Auth
       operationId: logout
       summary: Вихід
-      description: Відкликає всі refresh-токени сімейства поточної сесії.
+      description: "Відкликає всі refresh-токени сімейства поточної сесії. Потребує чинного access-токена: клієнт з простроченим access-токеном спершу виконує POST /auth/refresh."
       x-srs:
         - SRS-FUN-53
       requestBody:
@@ -254,6 +262,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -266,7 +278,7 @@ paths:
         - Auth
       operationId: requestPasswordReset
       summary: Запит відновлення пароля
-      description: Надсилає на підтверджену пошту одноразове посилання (строк дії 30 хв). Відповідь завжди 202 незалежно від існування адреси (захист від user enumeration); лист надсилається після відповіді, тому час відповіді не залежить від існування адреси. Новий запит анулює попередні невикористані токени користувача.
+      description: Надсилає на підтверджену пошту одноразове посилання https://{host}/reset-password#token=… (строк дії 30 хв); токен у фрагменті URL не надсилається на сервер. Відповідь завжди 202 незалежно від існування адреси (захист від user enumeration); лист надсилається після відповіді, тому час відповіді не залежить від існування адреси. Новий запит анулює попередні невикористані токени користувача.
       x-srs:
         - SRS-FUN-55
         - SRS-NFR-SEC-08
@@ -284,6 +296,10 @@ paths:
           description: Запит прийнято.
         "400":
           $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -296,9 +312,10 @@ paths:
         - Auth
       operationId: confirmPasswordReset
       summary: Встановлення нового пароля
-      description: Встановлює новий пароль за одноразовим токеном і відкликає всі refresh-токени користувача.
+      description: Встановлює новий пароль за одноразовим токеном і відкликає всі refresh-токени користувача. Уже видані access-токени діють до закінчення строку (до 15 хв).
       x-srs:
         - SRS-FUN-55
+        - SRS-NFR-SEC-08
       security: []
       requestBody:
         required: true
@@ -314,6 +331,10 @@ paths:
           description: Пароль змінено.
         "400":
           $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -350,21 +371,38 @@ paths:
           $ref: "#/components/responses/InternalError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
-    delete:
+  /me/deletion:
+    post:
       tags:
         - Me
       operationId: deleteMyAccount
       summary: Видалення облікового запису
-      description: Знеособлює обліковий запис (deleted_at, email і display_name), відкликає токени; відповіді зберігаються знеособленими для агрегатів курсу. Власник курсу спершу передає або видаляє курс.
+      description: Після повторної автентифікації поточним паролем знеособлює обліковий запис (deleted_at, email і display_name), відкликає токени; відповіді зберігаються знеособленими для агрегатів курсу. Невірний пароль → 403 reauthentication-failed. Власник курсу спершу видаляє свої курси, інакше 409 owner-has-courses. Операція оформлена як POST до підресурсу, оскільки OpenAPI 3.0.3 не визначає тіла запиту для DELETE.
       x-srs:
         - SRS-FUN-48
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountDeletion"
+            example:
+              password: Kv9#plume-river
       responses:
         "204":
           description: Обліковий запис видалено.
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -378,7 +416,7 @@ paths:
       operationId: getDailyPlan
       summary: План на день
       description: |-
-        Повертає попередній перегляд плану з тем-кандидатів усіх курсів студента: ліміт 30 питань, 2…8 на тему пропорційно пріоритету P, не більше 15 тем. Питання видаються під час POST /attempts у режимі daily_plan за планом, сформованим повторно.
+        Повертає попередній перегляд плану з тем-кандидатів усіх курсів, де користувач має роль student (перевіряє PlanController через AccessPolicyService; жодного такого курсу → 403): ліміт 30 питань, 2…8 на тему пропорційно пріоритету P, не більше 15 тем. Питання видаються під час POST /attempts у режимі daily_plan за планом, сформованим повторно.
 
         Ролі: student.
       x-srs:
@@ -416,6 +454,8 @@ paths:
                     nextReview: "2026-11-24"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -451,15 +491,16 @@ paths:
                 courseTitle: Бази даних
                 role: student
                 joinedAt: "2026-11-24T09:20:00Z"
-          headers:
-            Location:
-              $ref: "#/components/headers/Location"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
         "429":
@@ -545,6 +586,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -581,6 +626,8 @@ paths:
                 title: Бази даних
                 myRole: owner
                 createdAt: "2026-11-24T09:30:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -636,6 +683,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -661,6 +712,8 @@ paths:
       responses:
         "204":
           description: Курс видалено.
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -743,6 +796,8 @@ paths:
       responses:
         "204":
           description: Учасника виключено.
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -845,9 +900,6 @@ paths:
                 expiresAt: "2026-12-01T09:40:00Z"
                 revokedAt: null
                 createdAt: "2026-11-24T09:40:00Z"
-          headers:
-            Location:
-              $ref: "#/components/headers/Location"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -856,6 +908,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -883,6 +939,8 @@ paths:
       responses:
         "204":
           description: Код відкликано.
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -925,6 +983,8 @@ paths:
                   - id: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
                     title: Нормалізація баз даних
                     position: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -973,9 +1033,6 @@ paths:
                 id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
                 title: Транзакції та ACID
                 position: 3
-          headers:
-            Location:
-              $ref: "#/components/headers/Location"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -986,6 +1043,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -1040,6 +1101,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -1138,9 +1203,6 @@ paths:
                 eventDate: "2026-11-29"
                 topicIds:
                   - 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
-          headers:
-            Location:
-              $ref: "#/components/headers/Location"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1149,6 +1211,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
         "429":
@@ -1205,6 +1271,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
         "429":
@@ -1272,7 +1342,7 @@ paths:
       operationId: uploadLectureMaterial
       summary: Завантаження лекції PDF
       description: |-
-        Приймає PDF, перевіряє розмір, тип, сигнатуру, текстовий шар і обсяг до збереження.
+        Приймає PDF, перевіряє розмір, тип, сигнатуру, текстовий шар і обсяг до збереження. Тема іншого курсу → 404.
 
         Ролі: owner, co_instructor.
       x-srs:
@@ -1310,9 +1380,6 @@ paths:
                 pageCount: 18
                 textTokens: 9400
                 uploadedAt: "2026-11-24T10:00:00Z"
-          headers:
-            Location:
-              $ref: "#/components/headers/Location"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1395,7 +1462,7 @@ paths:
       operationId: uploadSourceTest
       summary: Завантаження зразка тесту
       description: |-
-        Приймає закритий зразок тесту PDF зі структурою «тема × тип → кількість» і лімітом часу.
+        Приймає закритий зразок тесту PDF зі структурою «тема × тип → кількість» і лімітом часу. Контрольний захід або тема структури іншого курсу → 404.
 
         Ролі: owner, co_instructor.
       x-srs:
@@ -1438,9 +1505,6 @@ paths:
                     questionType: single
                     questionCount: 5
                 uploadedAt: "2026-11-24T10:10:00Z"
-          headers:
-            Location:
-              $ref: "#/components/headers/Location"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1468,7 +1532,7 @@ paths:
       operationId: createGenerationJob
       summary: Постановка задачі генерації
       description: |-
-        Ставить задачу генерації в чергу BullMQ (jobId := idempotency_key) і повертає 202 без очікування Claude API. Наявна незавершена задача з тим самим idempotency_key повертається без створення нової.
+        Записує GenerationJob (id — UUID, на нього вказує Location) і ставить задачу в чергу BullMQ з ідентифікатором задачі черги, що дорівнює серверному idempotency_key (SHA-256), і повертає 202 без очікування Claude API. Наявна незавершена задача з тим самим idempotency_key повертається без створення нової. lectureMaterialId або sourceTestId іншого курсу → 404.
 
         Ролі: owner, co_instructor.
       x-srs:
@@ -1523,6 +1587,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
         "429":
@@ -1568,6 +1636,8 @@ paths:
                 createdAt: "2026-11-24T10:20:00Z"
                 startedAt: "2026-11-24T10:20:02Z"
                 finishedAt: "2026-11-24T10:20:41Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1587,7 +1657,7 @@ paths:
       operationId: listQuestions
       summary: Питання курсу
       description: |-
-        Повертає питання з фільтрами за статусом і темою; за замовчуванням — чернетки.
+        Повертає питання з фільтрами за статусом, темою і задачею генерації; за замовчуванням — чернетки.
 
         Ролі: owner, co_instructor.
       x-srs:
@@ -1611,6 +1681,13 @@ paths:
           in: query
           required: false
           description: Фільтр за темою.
+          schema:
+            type: string
+            format: uuid
+        - name: generationJobId
+          in: query
+          required: false
+          description: "Фільтр за задачею генерації: чернетки однієї задачі."
           schema:
             type: string
             format: uuid
@@ -1726,6 +1803,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
         "429":
@@ -1800,6 +1881,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -1872,6 +1957,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -1885,7 +1974,7 @@ paths:
       operationId: startAttempt
       summary: Початок спроби
       description: |-
-        Створює спробу в режимі daily_plan, practice або mock_test і видає питання без ознаки правильності з рандомізованим порядком. deadlineAt := startedAt + ліміт часу зразка (mock_test) або startedAt + min(2 хв × кількість питань, 60 хв) (daily_plan, practice). У режимі daily_plan план формується повторно на момент запиту. Наявна незавершена спроба того самого режиму з чинним лімітом часу → 409 attempt-in-progress з членом-розширенням attemptId; прострочена спроба попередньо завершується зі статусом expired; одночасні запити впорядковує унікальний частковий індекс attempts (user_id, mode) WHERE status = 'in_progress'. План daily_plan без тем або схвалених питань → 422 plan-empty.
+        Створює спробу в режимі daily_plan, practice або mock_test і видає питання без ознаки правильності з рандомізованим порядком. deadlineAt := startedAt + ліміт часу зразка (mock_test) або startedAt + min(2 хв × кількість питань, 60 хв) (daily_plan, practice). У режимі daily_plan план формується повторно на момент запиту. Наявна незавершена спроба того самого режиму з чинним лімітом часу → 409 attempt-in-progress з членом-розширенням attemptId; прострочена спроба попередньо завершується зі статусом expired; одночасні запити впорядковує унікальний частковий індекс attempts (user_id, mode) WHERE status = 'in_progress'. План daily_plan без тем або схвалених питань → 422 plan-empty. Роль перевіряє AttemptService: student у courseId з тіла (practice, mock_test) або хоча б в одному курсі (daily_plan), інакше 403; topicId або controlEventId іншого курсу → 404.
 
         Ролі: student.
       x-srs:
@@ -1947,6 +2036,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
         "429":
@@ -1962,7 +2055,7 @@ paths:
       operationId: getAttempt
       summary: Спроба
       description: |-
-        Повертає власну спробу з питаннями, зафіксованими відповідями і результатом після завершення. Спроба іншого користувача → 404.
+        Повертає власну спробу з питаннями, зафіксованими відповідями і результатом після завершення. Спроба іншого користувача → 404; після виключення студента з курсу спроба цього курсу → 404.
 
         Ролі: student.
       x-srs:
@@ -2000,6 +2093,8 @@ paths:
                       - id: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
                         text: 2НФ
                 answers: []
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -2019,7 +2114,7 @@ paths:
       operationId: submitAnswer
       summary: Фіксація відповіді
       description: |-
-        Фіксує відповідь ідемпотентно за (attemptId, questionId): повторне надсилання замінює обрані варіанти без нового запису. Публікує подію прогресу в кімнату курсу, до якого належить питання.
+        Фіксує відповідь ідемпотентно за (attemptId, questionId): повторне надсилання замінює обрані варіанти без нового запису. Питання не з цієї спроби → 404. Публікує подію прогресу після COMMIT у кімнату course:{courseId} курсу, до якого належить питання (для daily_plan — курс питання, оскільки courseId спроби дорівнює null).
 
         Ролі: student.
       x-srs:
@@ -2065,6 +2160,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
         "429":
@@ -2111,6 +2210,8 @@ paths:
                     intervalDays: 6
                     repetitions: 2
                     nextReview: "2026-11-30"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -2174,6 +2275,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -2241,7 +2346,7 @@ paths:
       operationId: publishMockTest
       summary: Публікація пробного тесту
       description: |-
-        Публікує пробний тест до заходу, якщо схвалених питань кожної комбінації «тема × тип» не менше подвоєної кількості у структурі зразка; інакше 422.
+        Публікує пробний тест до заходу за зразком цього заходу (sourceTestId іншого заходу або курсу → 404), якщо схвалених питань кожної комбінації «тема × тип» не менше подвоєної кількості у структурі зразка; інакше 422.
 
         Ролі: owner, co_instructor.
       x-srs:
@@ -2290,9 +2395,6 @@ paths:
                 timeLimitMinutes: 40
                 questionCount: 20
                 publishedAt: "2026-11-24T12:00:00Z"
-          headers:
-            Location:
-              $ref: "#/components/headers/Location"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -2301,6 +2403,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
         "429":
@@ -2372,7 +2478,7 @@ paths:
       operationId: confirmMastery
       summary: Підтвердження засвоєння теми
       description: |-
-        Фіксує підтвердження засвоєння теми студентом з confirmed_by і часом; повторний запит не змінює запис.
+        Фіксує підтвердження засвоєння теми студентом з confirmed_by і часом; повторний запит не змінює запис. Користувач, що не є студентом курсу, або тема іншого курсу → 404.
 
         Ролі: owner, co_instructor.
       x-srs:
@@ -2408,9 +2514,8 @@ paths:
                 topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
                 confirmedBy: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
                 confirmedAt: "2026-11-24T13:00:00Z"
-          headers:
-            Location:
-              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -2432,7 +2537,7 @@ components:
       description: "Access-токен у заголовку Authorization: Bearer <JWT>."
   headers:
     Location:
-      description: URI створеного ресурсу або задачі.
+      description: URI створеного ресурсу або задачі; повертається лише для ресурсів з операцією GET.
       schema:
         type: string
         format: uri-reference
@@ -2600,7 +2705,7 @@ components:
                 instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
                 requestId: req-7f3a9c2e
     Forbidden:
-      description: "Недостатньо прав: роль у курсі не дозволяє дію, ресурс іншого курсу або пошту не підтверджено."
+      description: "Недостатньо прав: роль у курсі не дозволяє дію, ресурс іншого курсу, пошту не підтверджено або пароль повторної автентифікації невірний."
       content:
         application/problem+json:
           schema:
@@ -2622,6 +2727,15 @@ components:
                 title: Пошту не підтверджено
                 status: 403
                 detail: Вхід можливий після підтвердження пошти за посиланням з листа.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            reauthFailed:
+              summary: Невірний пароль підтвердження
+              value:
+                type: /problems/reauthentication-failed
+                title: Повторна автентифікація не пройдена
+                status: 403
+                detail: Пароль не збігається з поточним; обліковий запис не видалено.
                 instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
                 requestId: req-7f3a9c2e
     NotFound:
@@ -2647,13 +2761,13 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
           examples:
-            emailTaken:
-              summary: Пошта вже зареєстрована
+            ownerHasCourses:
+              summary: Власник має курси
               value:
-                type: /problems/email-taken
-                title: Пошта вже зареєстрована
+                type: /problems/owner-has-courses
+                title: Користувач є власником курсів
                 status: 409
-                detail: Обліковий запис з цією поштою вже існує.
+                detail: Перед видаленням облікового запису видаліть курси, власником яких ви є.
                 instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
                 requestId: req-7f3a9c2e
             versionConflict:
@@ -2703,7 +2817,7 @@ components:
                 instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
                 requestId: req-7f3a9c2e
     PayloadTooLarge:
-      description: Файл перевищує 10 МБ (SRS-NFR-SEC-07).
+      description: "Тіло запиту перевищує ліміт: JSON понад 100 КБ або файл понад 10 МБ (SRS-NFR-SEC-07)."
       content:
         application/problem+json:
           schema:
@@ -2713,13 +2827,22 @@ components:
               summary: Файл завеликий
               value:
                 type: /problems/payload-too-large
-                title: Файл завеликий
+                title: Тіло запиту завелике
                 status: 413
                 detail: Розмір файлу 12 582 912 байт перевищує 10 485 760 байт.
                 instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
                 requestId: req-7f3a9c2e
+            jsonTooLarge:
+              summary: JSON-тіло завелике
+              value:
+                type: /problems/payload-too-large
+                title: Тіло запиту завелике
+                status: 413
+                detail: JSON-тіло перевищує 102 400 байт.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
     UnsupportedMediaType:
-      description: Файл не є PDF за MIME-типом або сигнатурою %PDF.
+      description: Content-Type не відповідає операції (application/json або multipart/form-data) або файл не є PDF за MIME-типом чи сигнатурою %PDF.
       content:
         application/problem+json:
           schema:
@@ -2729,9 +2852,18 @@ components:
               summary: Не PDF
               value:
                 type: /problems/unsupported-media-type
-                title: Непідтримуваний тип файлу
+                title: Непідтримуваний тип вмісту
                 status: 415
                 detail: Очікується application/pdf із сигнатурою %PDF.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            contentType:
+              summary: Невідповідний Content-Type
+              value:
+                type: /problems/unsupported-media-type
+                title: Непідтримуваний тип вмісту
+                status: 415
+                detail: "Очікується Content-Type: application/json."
                 instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
                 requestId: req-7f3a9c2e
     UnprocessableEntity:
@@ -3057,7 +3189,7 @@ components:
           pattern: ^[A-Za-z0-9_-]{43}$
           minLength: 43
           maxLength: 43
-          description: Одноразовий токен з посилання в листі (32 випадкові байти, base64url).
+          description: Одноразовий токен з фрагмента посилання в листі (#token=…; 32 випадкові байти, base64url). Фрагмент URL не надсилається на сервер.
     LoginRequest:
       type: object
       additionalProperties: false
@@ -3140,6 +3272,19 @@ components:
           enum:
             - 2592000
           description: Строк дії refresh-токена, с (30 днів).
+    AccountDeletion:
+      type: object
+      additionalProperties: false
+      required:
+        - password
+      properties:
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 128
+          writeOnly: true
+          description: Поточний пароль для повторної автентифікації перед незворотною дією.
     UserProfile:
       type: object
       additionalProperties: false

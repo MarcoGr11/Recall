@@ -27,6 +27,7 @@
 > | 20 | ЛР6 | Інтеграційний аудит: ERD, API, алгоритми (Data & Logic Gatekeeper) |
 > | 21 | ЛР7 | Обґрунтування архітектурного стилю: Architectural Audit (Chief Enterprise Architect) |
 > | 22 | ЛР7 | Use Cases: Behavioral & Transactional Audit (Senior Systems Analyst) |
+> | 23 | ЛР7 | Матриця маршрутів і потоки даних: Integration & API Security Audit (Principal Integration Architect) |
 
 
 ## Запис 1 — Валідація першої теми Retain (15.09.2026)
@@ -2632,6 +2633,352 @@ ERD, специфікацію таблиць і план індексів нав
 ### Фінальна версія
 
 Підрозділ 2.6 [2_design.md](2_design.md): рис. 2.5 і табл. 2.15–2.26. Змінено: [2_design.md](2_design.md) (підрозділи 2.3, 2.5, 2.6, 2.7.2), [api/openapi.yaml](api/openapi.yaml) (`plan-empty`, `attemptId`, описи `startAttempt` і `requestPasswordReset`; `redocly lint` — 0 помилок), [srs.md](srs.md) і PKM-копія (SRS-FUN-15, SRS-FUN-21, SRS-FUN-55), нотатки 05, 10, 11, 23, [15-Паспорт проєкту.md](15-Паспорт%20проєкту.md).
+
+## Запис 23 — Матриця маршрутів і потоки даних: Integration & API Security Audit (24.11.2026)
+
+**Інструмент:** Claude (Anthropic), сесія Claude Code в репозиторії проєкту. **Дата:** 24.11.2026. **Етап:** ЛР7, Завдання 3.
+
+> **Розподіл ролей.** Автор визначив вимоги, обмеження проєкту та архітектурні рішення,
+> ухвалив рішення щодо кожного зауваження аудитора і затвердив фінальну версію.
+> Claude (Anthropic) за інструкціями автора сформував чернетку артефакту, виконав аудит
+> за промптом методички та вніс затверджені автором правки.
+
+### Внесок автора
+
+- Визначив склад матриці (усі операції контракту, обробник — контролер табл. 2.11) і три критичні потоки даних: генерація за лекцією, фіксація відповіді, відновлення пароля.
+- На кроці [СТОП] прийняв рішення щодо N-01…N-26 у запропонованому вигляді: реєстрація без розкриття існування облікового запису (N-12), токен у фрагменті URL (N-13), redact секретів (N-14), перевірка вкладених ідентифікаторів (N-16), розділення ліміту запитів за IP і за користувачем з довірою одному проксі (N-18, N-19).
+- Відхилив зміну коду простроченого токена (N-06) і операції, яких не вимагає SRS (N-09); прийняв як ризики блокування відновлення лімітом на адресу (N-26), дію access-токенів до 15 хв після зміни пароля (N-15) і дублікат матеріалу при повторі після тайм-ауту (N-21).
+
+### Вхідні дані
+
+- Контракт [api/openapi.yaml](api/openapi.yaml) з ЛР6 (коміт `faba0c5`), підрозділи 2.2, 2.3, 2.6 [2_design.md](2_design.md), SRS.
+
+> [!quote]- Використаний промпт (розгорнути)
+> Роль: Principal Integration Architect, Network Security Engineer та суворий техлід, що проводить аудит мережевих інтерфейсів перед деплоєм у хмару.
+> Контекст: Я студент 4 курсу спеціальності 121/F2 «Інженерія ПЗ». Я склав текстову топологічну матрицю своїх API-маршрутів та описав потоки даних між клієнтом і сервером для Розділу 2 диплому. Мені потрібен твій цинічний та жорсткий аудит моєї логіки взаємодії. Тобі категорично заборонено генерувати виправлені таблиці, писати готові маршрути чи замінювати мою роботу.
+> Мої базові API-контракти (OpenAPI/gRPC з ЛР№6): (повний текст [api/openapi.yaml](api/openapi.yaml), коміт `faba0c5`)
+> Ось моя написана текстова топологія та описи Data Flows: (блок «Перша версія артефакту»)
+> Твоє завдання: Проведи краш-тест моєї карти маршрутів та видай технічний звіт українською мовою у форматі суворого логу зауважень за наступними пунктами:
+> 1. Аналіз архітектурних розбіжностей (Signature & REST/gRPC Compliance): Знайди конфлікти між моєю текстовою таблицею та сирими файлами контрактів з ЛР№6 (наприклад, незбіг типів полів, зайві чи пропущені ендпоінти, використання некоректних HTTP-статусів). Розкритикуй порушення REST-стандартів іменування ресурсів у моїй таблиці.
+> 2. Атака на безпеку передачі даних (Mishandling Data Audit): Жорстко вкажи, де в моїх маршрутах є дірки в безпеці. Чи передаю я конфіденційні дані (паролі, токени, ID користувачів) через небезпечні Query-параметри в URL (що логується у серверах)? Чи захищені мутуючі маршрути (POST, PUT, DELETE) обов'язковим Bearer-токеном?
+> 3. Виявлення упущених інфраструктурних інваріантів (Network Edge Cases): Проаналізуй мої потоки даних (Data Flows). Про що я забув згадати при передачі великих пакетів? (наприклад, відсутність обмежень на розмір тіла запиту Max Body Size при завантаженні файлів, упущення механізмів пагінації для списків GET /resumes?page=1&limit=10, відсутність CORS-політик або Rate Limiting).
+> Видай мені виключно Звіт про мережеві конфлікти та уразливості інтерфейсів (API Integration Review Log) у вигляді маркованого списку критичних зауважень та запитань, які я маю виправити та переписати самостійно.
+
+> [!example]- Перша версія артефакту — чернетка матриці маршрутів і Data Flows (розгорнути)
+> ### 2.5.3. Карта інтерфейсних маршрутів системи
+>
+> Матриця містить усі 47 операцій контракту [api/openapi.yaml](./api/openapi.yaml) у порядку їх опису в контракті. URI наведено відносно базового `https://{host}/api/v1`. Параметри шляху (`courseId`, `topicId`, `userId` тощо) — UUID і в графі «Вхідні параметри» не повторюються. Позначка `?` після імені поля — необов'язкове поле. Усі маршрути, крім позначених «публічний», вимагають заголовка `Authorization: Bearer <access-токен>`. Контейнер-обробник — Backend API (підрозділ 2.2.2), у дужках — контролер з табл. 2.11.
+>
+> Таблиця 2.27 – Карта інтерфейсних маршрутів системи
+>
+> | ID | Метод | URI | Вхідні параметри / Payload | Призначення | Доступ | Контейнер-обробник |
+> |---|---|---|---|---|---|---|
+> | API-REQ-01 | POST | `/auth/register` | body: `email`: string(email, ≤ 254), `password`: string(10…128), `displayName`: string(1…64) | Реєстрація за корпоративною поштою, лист підтвердження | публічний | Backend API: AuthController |
+> | API-REQ-02 | POST | `/auth/verify-email` | body: `token`: string(43) | Підтвердження пошти одноразовим токеном | публічний | Backend API: AuthController |
+> | API-REQ-03 | POST | `/auth/verify-email/resend` | body: `email`: string(email, ≤ 254) | Повторний лист підтвердження | публічний | Backend API: AuthController |
+> | API-REQ-04 | POST | `/auth/login` | body: `email`: string(email, ≤ 254), `password`: string(1…128) | Вхід, видача пари токенів | публічний | Backend API: AuthController |
+> | API-REQ-05 | POST | `/auth/refresh` | body: `refreshToken`: string(43) | Оновлення пари токенів з ротацією | публічний | Backend API: AuthController |
+> | API-REQ-06 | POST | `/auth/logout` | body: `refreshToken`: string(43) | Анулювання refresh-токена | автентифікований | Backend API: AuthController |
+> | API-REQ-07 | POST | `/auth/password-reset/request` | body: `email`: string(email, ≤ 254) | Запит листа відновлення пароля | публічний | Backend API: AuthController |
+> | API-REQ-08 | POST | `/auth/password-reset/confirm` | body: `token`: string(43), `newPassword`: string(10…128) | Встановлення нового пароля за токеном | публічний | Backend API: AuthController |
+> | API-REQ-09 | GET | `/me` | — | Профіль поточного користувача | автентифікований | Backend API: AuthController |
+> | API-REQ-10 | DELETE | `/me` | — | Видалення облікового запису зі знеособленням | автентифікований | Backend API: PrivacyController |
+> | API-REQ-11 | GET | `/me/daily-plan` | — | Попередній перегляд плану на день | student | Backend API: PlanController |
+> | API-REQ-12 | POST | `/me/memberships` | body: `code`: string(8) | Приєднання до курсу за кодом запрошення | автентифікований | Backend API: CourseController |
+> | API-REQ-13 | GET | `/courses` | query `page`: integer(1…10000); query `limit`: integer(1…100) | Курси поточного користувача | автентифікований | Backend API: CourseController |
+> | API-REQ-14 | POST | `/courses` | body: `title`: string(1…200), `topics?`: object[] (0…100) | Створення курсу з темами | автентифікований | Backend API: CourseController |
+> | API-REQ-15 | GET | `/courses/{courseId}` | — | Картка курсу | owner, co_instructor, student | Backend API: CourseController |
+> | API-REQ-16 | PATCH | `/courses/{courseId}` | body: `title`: string(1…200) | Зміна назви курсу | owner | Backend API: CourseController |
+> | API-REQ-17 | DELETE | `/courses/{courseId}` | — | Видалення курсу | owner | Backend API: CourseController |
+> | API-REQ-18 | GET | `/courses/{courseId}/members` | query `page`: integer(1…10000); query `limit`: integer(1…100) | Учасники курсу | owner, co_instructor | Backend API: CourseController |
+> | API-REQ-19 | DELETE | `/courses/{courseId}/members/{userId}` | — | Виключення учасника | owner | Backend API: CourseController |
+> | API-REQ-20 | GET | `/courses/{courseId}/invite-codes` | query `page`: integer(1…10000); query `limit`: integer(1…100) | Коди запрошення курсу | owner | Backend API: CourseController |
+> | API-REQ-21 | POST | `/courses/{courseId}/invite-codes` | body: `role`: string(co_instructor|student), `expiresInDays?`: integer(1…30) | Створення коду запрошення | owner | Backend API: CourseController |
+> | API-REQ-22 | DELETE | `/courses/{courseId}/invite-codes/{inviteCodeId}` | — | Відкликання коду запрошення | owner | Backend API: CourseController |
+> | API-REQ-23 | GET | `/courses/{courseId}/topics` | — | Теми курсу | owner, co_instructor, student | Backend API: CourseController |
+> | API-REQ-24 | POST | `/courses/{courseId}/topics` | body: `title`: string(1…200), `position?`: integer(1…500) | Створення теми | owner, co_instructor | Backend API: CourseController |
+> | API-REQ-25 | PATCH | `/courses/{courseId}/topics/{topicId}` | body: `title?`: string(1…200), `position?`: integer(1…500) | Зміна теми | owner, co_instructor | Backend API: CourseController |
+> | API-REQ-26 | GET | `/courses/{courseId}/control-events` | query `page`: integer(1…10000); query `limit`: integer(1…100) | Контрольні заходи курсу | owner, co_instructor, student | Backend API: CourseController |
+> | API-REQ-27 | POST | `/courses/{courseId}/control-events` | body: `type`: ControlEventType, `eventDate`: string(date), `topicIds`: string(uuid)[] (1…100) | Створення контрольного заходу | owner, co_instructor | Backend API: CourseController |
+> | API-REQ-28 | PATCH | `/courses/{courseId}/control-events/{controlEventId}` | body: `type?`: ControlEventType, `eventDate?`: string(date), `topicIds?`: string(uuid)[] (1…100) | Зміна контрольного заходу | owner, co_instructor | Backend API: CourseController |
+> | API-REQ-29 | GET | `/courses/{courseId}/lecture-materials` | query `page`: integer(1…10000); query `limit`: integer(1…100) | Лекційні матеріали курсу | owner, co_instructor | Backend API: CourseController |
+> | API-REQ-30 | POST | `/courses/{courseId}/topics/{topicId}/lecture-materials` | multipart: `file`: string(binary, ≤ 10 МБ) | Завантаження PDF лекції до теми | owner, co_instructor | Backend API: CourseController |
+> | API-REQ-31 | GET | `/courses/{courseId}/source-tests` | query `page`: integer(1…10000); query `limit`: integer(1…100) | Зразки тестів курсу | owner, co_instructor | Backend API: CourseController |
+> | API-REQ-32 | POST | `/courses/{courseId}/control-events/{controlEventId}/source-tests` | multipart: `file`: string(binary, ≤ 10 МБ), `timeLimitMinutes`: integer(1…240), `structure`: SourceTestStructureItem[] (1…200) | Завантаження PDF зразка тесту | owner, co_instructor | Backend API: CourseController |
+> | API-REQ-33 | POST | `/courses/{courseId}/generation-jobs` | header `Idempotency-Key`: string(uuid); body: `type`: string(lecture_test), `lectureMaterialId`: string(uuid) **або** `type`: string(mock_questions), `sourceTestId`: string(uuid) | Постановка задачі генерації; виконує Generation Worker | owner, co_instructor | Backend API: GenerationController → Generation Worker |
+> | API-REQ-34 | GET | `/courses/{courseId}/generation-jobs/{jobId}` | — | Стан задачі генерації | owner, co_instructor | Backend API: GenerationController |
+> | API-REQ-35 | GET | `/courses/{courseId}/questions` | query `page`: integer(1…10000); query `limit`: integer(1…100); query `status`: QuestionStatus; query `topicId`: string(uuid) | Питання курсу з фільтрами | owner, co_instructor | Backend API: ModerationController |
+> | API-REQ-36 | PATCH | `/courses/{courseId}/questions/{questionId}` | body: `version`: integer, `topicId?`: string(uuid), `type?`: QuestionType, `stem?`: string(1…2000), `explanation?`: string(≤ 2000), `options?`: QuestionOptionInput[] (2…8) | Редагування чернетки | owner, co_instructor | Backend API: ModerationController |
+> | API-REQ-37 | POST | `/courses/{courseId}/questions/{questionId}/approval` | body: `version`: integer | Схвалення чернетки | owner, co_instructor | Backend API: ModerationController |
+> | API-REQ-38 | POST | `/courses/{courseId}/questions/{questionId}/rejection` | body: `version`: integer, `reason`: string(1…500) | Відхилення чернетки | owner, co_instructor | Backend API: ModerationController |
+> | API-REQ-39 | POST | `/attempts` | body: `mode`: string(daily_plan) **або** `mode`: string(practice), `courseId`: string(uuid), `topicId`: string(uuid) **або** `mode`: string(mock_test), `courseId`: string(uuid), `controlEventId`: string(uuid) | Початок спроби (план, практика, пробний тест) | student | Backend API: AttemptController |
+> | API-REQ-40 | GET | `/attempts/{attemptId}` | — | Стан спроби і питання без ознаки правильності | student | Backend API: AttemptController |
+> | API-REQ-41 | POST | `/attempts/{attemptId}/answers` | body: `questionId`: string(uuid), `optionIds`: string(uuid)[] (1…8) | Фіксація відповіді | student | Backend API: AttemptController |
+> | API-REQ-42 | POST | `/attempts/{attemptId}/completion` | — | Завершення спроби, оновлення ReviewState | student | Backend API: AttemptController |
+> | API-REQ-43 | POST | `/attempts/{attemptId}/events` | body: `events`: AttemptEvent[] (1…100) | Пакет подій антисписування | student | Backend API: AntiCheatController |
+> | API-REQ-44 | GET | `/courses/{courseId}/mock-tests` | query `page`: integer(1…10000); query `limit`: integer(1…100) | Опубліковані пробні тести | owner, co_instructor, student | Backend API: MockTestController |
+> | API-REQ-45 | PUT | `/courses/{courseId}/control-events/{controlEventId}/mock-test` | body: `sourceTestId`: string(uuid) | Публікація пробного тесту за зразком | owner, co_instructor | Backend API: MockTestController |
+> | API-REQ-46 | GET | `/courses/{courseId}/heatmap` | query `page`: integer(1…10000); query `limit`: integer(1…100) | Теплова карта засвоєння | owner, co_instructor | Backend API: MonitoringController |
+> | API-REQ-47 | PUT | `/courses/{courseId}/members/{userId}/mastery-confirmations/{topicId}` | — | Підтвердження засвоєння теми | owner, co_instructor | Backend API: MonitoringController |
+>
+> ### 2.5.4. Потоки даних
+>
+> **DF-01. Завантаження PDF лекції і генерація чернеток питань (UC-02).**
+> 1. Mobile App надсилає `POST /api/v1/courses/{courseId}/topics/{topicId}/lecture-materials` через HTTPS із тілом `multipart/form-data` (частина `file`) і заголовком `Authorization: Bearer`.
+> 2. Reverse Proxy (Caddy) термінує TLS 1.2+ і передає запит до Backend API у внутрішній мережі docker-compose.
+> 3. Конвеєр middleware Backend API: RequestContext присвоює `requestId`; SecurityHeaders додає заголовки helmet; RateLimiter перевіряє 100 запитів/хв на користувача; JwtAuthMiddleware перевіряє підпис і `exp` access-токена; CourseRoleGuard через AccessPolicyService перевіряє роль owner або co_instructor у курсі `courseId` (інакше 403); UploadMiddleware (multer) приймає файл ≤ 10 МБ з MIME `application/pdf` і сигнатурою `%PDF` (інакше 413 або 415).
+> 4. CourseService видобуває текст через IPdfTextExtractor (pdfjs у worker_threads), перевіряє ≤ 60 сторінок і ≤ 40 000 токенів (інакше 422), зберігає файл у томі PDF і рядок `lecture_materials`; відповідь 201 із заголовком `Location`.
+> 5. Mobile App надсилає `POST /courses/{courseId}/generation-jobs` з `Idempotency-Key` і тілом `{type: "lecture_test", lectureMaterialId}`. BudgetGuard перевіряє добовий ліміт вартості (інакше 429 `budget-exceeded`); GenerationJobService записує GenerationJob зі статусом `queued` і ставить задачу в BullMQ з `jobId` = `idempotency_key`; відповідь 202 з `Location`.
+> 6. Generation Worker бере задачу з Redis, надсилає текст лекції в Claude API через HTTPS, перевіряє відповідь схемою zod і зберігає питання зі статусом `draft` в одній транзакції.
+> 7. JobEventsListener у Backend API отримує подію `completed` з BullMQ QueueEvents, ProgressPublisher передає її в ProgressGateway, який надсилає подію в кімнату Socket.io викладача.
+> 8. Mobile App запитує `GET /courses/{courseId}/questions?status=draft&page=1&limit=20`.
+>
+> **DF-02. Фіксація відповіді і подія моніторингу (UC-01).**
+> 1. Mobile App надсилає `POST /api/v1/attempts/{attemptId}/answers` з тілом JSON `{questionId, optionIds}`.
+> 2. Caddy і конвеєр middleware — як у кроках 2–3 DF-01, без UploadMiddleware; ValidationMiddleware перевіряє тіло схемою zod (інакше 400).
+> 3. AttemptController передає запит у TestDeliveryService, який перевіряє, що спроба належить поточному студенту (інакше 404), і AttemptService, який перевіряє `deadlineAt` (інакше 422 `attempt-expired`) і статус спроби (інакше 409 `attempt-finished`).
+> 4. AttemptService записує відповідь за ключем (attemptId, questionId) і після COMMIT публікує подію прогресу; ProgressGateway надсилає її в кімнату `course:{courseId}`.
+> 5. Відповідь 200 без ознаки правильності відповіді.
+>
+> **DF-03. Відновлення пароля (UC-03).**
+> 1. Mobile App надсилає `POST /api/v1/auth/password-reset/request` з тілом `{email}` без токена авторизації.
+> 2. RateLimiter обмежує 5 запитів/год на поштову адресу і 5 запитів/год на IP-адресу (інакше 429).
+> 3. AuthService для наявного облікового запису анулює попередні невикористані токени, генерує новий токен, зберігає його хеш SHA-256 і після відповіді надсилає лист через SMTP; відповідь 202 однакова для наявної і відсутньої адреси.
+> 4. Користувач відкриває universal link `https://{host}/reset-password?token=…`, застосунок показує форму нового пароля.
+> 5. Mobile App надсилає `POST /auth/password-reset/confirm` з тілом `{token, newPassword}`; AuthService перевіряє хеш токена і строк дії, змінює пароль, позначає токен використаним; відповідь 204.
+
+> [!abstract]- Повний звіт аудитора (розгорнути)
+> # API Integration Review Log: Recall, табл. 2.27 (API-REQ-01…47), підрозділ 2.5.4 (DF-01…DF-03)
+>
+> **Що перевірено.** Матрицю (табл. 2.27) звірено з `openapi.yaml`. Вбудована копія контракту збігається з `docs/api/openapi.yaml`: 47 операцій, 40 шляхів. Також звірено з табл. 2.11, рис. 2.3, UC-02, UC-03 і SRS-NFR-SEC-01…12.
+>
+> **Що перевірено і претензій не має:**
+> - 47 рядків матриці збігаються з 47 операціями контракту за методом, шляхом і порядком.
+> - Сім рядків «публічний» відповідають сімом операціям із `security: []`.
+> - 25 із 32 мутуючих операцій успадковують глобальну `bearerAuth`.
+> - Query-параметри REST-контракту не містять секретів: там лише `page`, `limit`, `status` і `topicId`.
+>
+> ---
+>
+> ## 1. Архітектурні розбіжності (Signature & REST Compliance)
+>
+> - **N-01 [блокер]. Роль `student` на маршрутах без контексту курсу (API-REQ-11, API-REQ-39…43).**
+>   - `CourseRole` — роль у межах курсу (SRS-FUN-03). CourseRoleGuard (`requireCourseRole(...)`, рис. 2.3) бере `courseId` зі шляху, а в `/me/daily-plan` і `/attempts/*` цього параметра немає.
+>   - У контракті `getDailyPlan` (`/me/daily-plan` GET) взагалі немає відповіді 403. Отже, будь-який автентифікований користувач, зокрема той, хто лише owner, отримає 200 попри «student» у матриці.
+>   - Операції `/attempts/*` декларують 403, але ніде не сказано, за якої умови.
+>   - Питання 1: хто і за якими даними перевіряє роль для API-REQ-39 у режимах `practice` і `mock_test`? Там `courseId` лежить у тілі, а ValidationMiddleware за рис. 2.3 працює після CourseRoleGuard.
+>   - Питання 2: що відбувається з API-REQ-41 і API-REQ-42, якщо студента виключили з курсу (API-REQ-19) посеред спроби?
+>
+> - **N-02. Колонка «Контейнер-обробник» не збігається з табл. 2.11.**
+>   - API-REQ-09 (`GET /me`) віднесено до AuthController. У табл. 2.11 його відповідальність — реєстрація, вхід, токени, відновлення; профілю там немає. Жоден компонент табл. 2.11 не відповідає за `GET /me`.
+>   - API-REQ-39 у режимі `mock_test` обробляє AttemptController, тоді як табл. 2.11 відносить «проходження пробного тесту» до MockTestController.
+>   - API-REQ-42 (`/completion`) теж в AttemptController, але його відповідальність у табл. 2.11 — лише «видача тесту, фіксація відповіді».
+>   - У API-REQ-33 записано «GenerationController → Generation Worker». Це змішує синхронний HTTP-обробник з асинхронним споживачем іншого контейнера, і колонка втрачає однозначний зміст.
+>
+> - **N-03. Різний зміст однієї операції (API-REQ-06).**
+>   - Матриця: «Анулювання refresh-токена».
+>   - Контракт (`/auth/logout`) і SRS-FUN-53: «відкликає всі refresh-токени сімейства».
+>   - Через глобальну `bearerAuth` операція вимагає чинного access-токена (15 хв). Отже, клієнт із простроченим access отримає 401, і сімейство refresh-токенів житиме ще 30 днів, якщо клієнт спершу не виконає `/auth/refresh`. Це свідоме рішення? Де воно описано?
+>
+> - **N-04. Матриця губить обмеження схем, хоча подана як похідна від контракту.**
+>   - API-REQ-25 і API-REQ-28: усі поля позначено як необов'язкові. Але `TopicUpdate` і `ControlEventUpdate` мають `minProperties: 1`, тож `{}` за матрицею валідний, а за контрактом дає 400.
+>   - API-REQ-36: не відображено `QuestionUpdate.minProperties: 2` (тобто `version` і ще хоча б одне поле).
+>   - Пропущено `pattern`:
+>     - токен `^[A-Za-z0-9_-]{43}$` (API-REQ-02, 05, 06, 08);
+>     - код `^[A-HJ-NP-Z2-9]{8}$` (API-REQ-12).
+>   - Пропущено `uniqueItems`: `topicIds` (API-REQ-27, 28) і `optionIds` (API-REQ-41).
+>   - Пропущено `minimum: 1` для `version` (API-REQ-36…38).
+>   - Пропущено значення за замовчуванням: `expiresInDays = 7` (API-REQ-21), `status = draft` (API-REQ-35).
+>   - Не розкрито схему елемента `topics` (API-REQ-14).
+>   - Або матриця є повною сигнатурою, або в ній явно сказано, що вона скорочена.
+>
+> - **N-05. Неповний набір статусів у контракті.**
+>   - 400 відсутній в операціях з UUID-параметрами шляху, хоча ValidationMiddleware перевіряє `params` і відповідає 400 (табл. 2.11). Це API-REQ-15, 17, 19, 22, 23, 34, 40, 42, 47, тобто шляхи `/courses/{courseId}` (GET, DELETE), `…/members/{userId}` DELETE, `…/invite-codes/{inviteCodeId}` DELETE, `…/topics` GET, `…/generation-jobs/{jobId}` GET, `/attempts/{attemptId}` GET, `…/completion` POST і `…/mastery-confirmations/{topicId}` PUT.
+>   - 413 задокументовано лише для двох multipart-операцій, а `components.responses.PayloadTooLarge` описує тільки файл. Решта 24 JSON-операції (зокрема API-REQ-43 з пакетом до 100 подій) отримають 413 від парсера тіла, але цього в контракті немає.
+>   - Для JSON-операцій не описано 415 на неправильний `Content-Type`.
+>
+> - **N-06. Суперечлива таксономія помилок для одноразових токенів (API-REQ-02, API-REQ-08).**
+>   - Прострочений або використаний токен повертає 400 `/problems/invalid-token` (`components.responses.BadRequest`).
+>   - Водночас `components.responses.UnprocessableEntity` визначає 422 як «валідний за схемою, але порушує бізнес-правило». Токен правильного формату, у якого минув строк дії, підпадає саме під це визначення.
+>   - За кодом статусу клієнт не відрізнить «виправ введення» від «запроси нове посилання». Чим обґрунтовано виняток?
+>
+> - **N-07. `Location` вказує на ресурси, яких немає в контракті.**
+>   - Правило 2.5.1 і `components.headers.Location` («URI створеного ресурсу») вимагають `Location` на 201.
+>   - Але операції GET немає для створених сутностей:
+>     - membership (API-REQ-12);
+>     - код запрошення (API-REQ-21);
+>     - тема (API-REQ-24; шлях `/courses/{courseId}/topics/{topicId}` має лише `patch`);
+>     - контрольний захід (API-REQ-27; `…/control-events/{controlEventId}` — лише `patch`);
+>     - лекційний матеріал (API-REQ-30);
+>     - зразок тесту (API-REQ-32);
+>     - пробний тест (API-REQ-45);
+>     - підтвердження засвоєння (API-REQ-47).
+>   - Що отримає клієнт, перейшовши за `Location`: 404 чи 405? Який URI повертає `Location` у API-REQ-01?
+>
+> - **N-08. Порушення власного правила іменування ресурсів (2.5.1: «ресурси названо іменниками»).**
+>   - (а) Група Auth (API-REQ-01…08) — це RPC-дієслова: `/auth/login`, `/logout`, `/refresh`, `/register`, `/verify-email/resend`, `/password-reset/request`, `/password-reset/confirm`. Виняток ніде не задекларовано.
+>   - (б) Асиметрична ієрархія, у якій один ресурс не має канонічного URI:
+>     - лекційний матеріал створюється в `/topics/{topicId}/lecture-materials` (API-REQ-30), а перелік — у `/courses/{courseId}/lecture-materials` (API-REQ-29), без фільтра `topicId`;
+>     - зразок тесту створюється в `/control-events/{controlEventId}/source-tests` (API-REQ-32), а перелік — у `/courses/{courseId}/source-tests` (API-REQ-31);
+>     - пробний тест — однина `…/control-events/{controlEventId}/mock-test` (API-REQ-45), а перелік — `/courses/{courseId}/mock-tests` (API-REQ-44).
+>   - (в) «Підресурси-іменники» `/approval`, `/rejection`, `/completion` (API-REQ-37, 38, 42) викликаються через POST і повертають 200 без `Location`, а прочитати їх через GET неможливо. Отже, це команди, а не ресурси. Те саме з `/answers` (API-REQ-41) і `/events` (API-REQ-43): вони створюють записи, але повертають 200 всупереч правилу «створення → 201».
+>   - (г) `/me/memberships` (API-REQ-12) має лише POST: немає ні GET, ні DELETE (вихід з курсу). Ту саму сутність читають через `GET /courses` (API-REQ-13), тобто одна сутність має дві назви.
+>   - (д) DELETE у API-REQ-22 фактично лише встановлює `revoked_at`, і запис і далі видно в API-REQ-20. Що повертає повторний DELETE: 204 чи 404?
+>
+> - **N-09. Контракт посилається на операції, яких немає.**
+>   - Опис `deleteMyAccount` (API-REQ-10): «Власник курсу спершу передає або видаляє курс». Операції передачі власності серед 47 немає. Для owner лишається 409 або видалення курсу разом із даними студентів (API-REQ-17).
+>   - Немає DELETE для теми, контрольного заходу, лекційного матеріалу і зразка тесту. Звірте з SRS-FUN-07…10 і SRS-FUN-12.
+>   - Немає переліку задач генерації. Після перезапуску застосунку клієнт не знайде `jobId` для API-REQ-34, якщо не зберіг `Location`.
+>
+> - **N-10. Endpoint поза матрицею і контрактом.**
+>   - Матриця заявляє «усі операції», але `GET /health` (рис. 2.3, табл. 2.11, SRS-NFR-OBS-02) не входить ні в контракт, ні в матрицю.
+>   - За рис. 2.3 він відгалужується від RequestContext в обхід SecurityHeaders і RateLimiter.
+>   - Чи публікує його Caddy на порту 443? Якщо так, це анонімний endpoint без ліміту запитів, який на кожен виклик звертається до PostgreSQL і показує стан Redis (`queue: down`).
+>
+> - **N-11. Колізія імені `jobId` (API-REQ-34, DF-01 крок 5).**
+>   - У шляху API-REQ-34 `{jobId}` — це `GenerationJob.id` (UUID, `components.parameters.JobId`).
+>   - У DF-01 крок 5 і в описі `createGenerationJob` «`jobId` = `idempotency_key`» означає ідентифікатор BullMQ, який за 2.5.2 є SHA-256, а не UUID.
+>   - У кроці 5 це стоїть поруч із заголовком `Idempotency-Key`, тож читач зробить висновок, що jobId у BullMQ — це клієнтський UUID. Це суперечить дворівневій ідемпотентності з 2.5.2.
+>   - Який саме ідентифікатор потрапляє в `Location`?
+>
+> ## 2. Безпека передачі даних (Mishandling Data Audit)
+>
+> - **N-12 [блокер]. Перебір облікових записів через API-REQ-01.**
+>   - `POST /auth/register` повертає 409 `/problems/email-taken` (`components.responses.Conflict.examples.emailTaken`).
+>   - Це обнуляє захист від перебору, заявлений для API-REQ-03, 04, 07 (SRS-FUN-55, 2.5.2 «Автентифікація»). Існування будь-якої адреси перевіряється одним викликом реєстрації, а ліміт для реєстрації в SRS-NFR-SEC-08 не задано.
+>   - API-REQ-04 повертає 403 `email-not-verified`. Ця перевірка йде до перевірки пароля чи після? Якщо до, то непідтверджені облікові записи перебираються без пароля.
+>
+> - **N-13 [блокер]. Токен відновлення в query (DF-03 крок 4).**
+>   - Посилання має вигляд `https://{host}/reset-password?token=…`, тоді як `info.description` контракту і 2.5.1 стверджують, що токени не передаються в query.
+>   - UC-03 крок 2 каже «сервер не викликається». Це правда лише тоді, коли застосунок установлено і перевірку App Links / Universal Links пройдено.
+>   - За AF-03E на комп'ютері статичну сторінку віддає Caddy. Отже, GET-запит із токеном доходить до сервера, і токен може потрапити в:
+>     - access log Caddy (якщо його ввімкнено);
+>     - історію браузера;
+>     - `Referer` будь-якого підресурсу сторінки;
+>     - поштові сканери посилань корпоративного шлюзу, які відкривають URL заздалегідь.
+>   - Те саме питання для посилання підтвердження пошти (API-REQ-02), яке в жодному DF не описано.
+>   - Де зафіксовано, що саме журналює Caddy і з якою `Referrer-Policy` віддається сторінка?
+>
+> - **N-14 [блокер]. Секрети в журналах (DF-01 крок 3; табл. 2.11, Logger/pino).**
+>   - Ніде не визначено правил приховування (redact) для:
+>     - заголовка `Authorization: Bearer` (40 захищених операцій);
+>     - тіл API-REQ-01, 04, 05, 06, 08 (`password`, `newPassword`, `refreshToken`).
+>   - Без цього правило «секрети не в query» нічого не захищає: секрети потрапляють у журнали із заголовків і тіл.
+>   - Чи є redact-перелік у pino і в access log Caddy? Де він задокументований?
+>
+> - **N-15. Мутуючі маршрути і Bearer: формально захищені, по суті є діри.**
+>   - 25 захищених мутуючих операцій успадковують `bearerAuth`. Проблеми такі:
+>     - (а) API-REQ-10 `DELETE /me` — незворотна дія лише за access-токеном, без повторного підтвердження паролем. Викрадений токен дає 15 хв на знищення облікового запису.
+>     - (б) DF-03 крок 5 не згадує ні відкликання refresh-токенів, яке є в контракті `confirmPasswordReset`, ні те, що видані access-токени лишаються чинними до 15 хв (визнано в постумовах UC-03). Чи зафіксовано цей ризик як прийнятий?
+>     - (в) Публічні мутуючі API-REQ-01, 02, 05, 08 не мають числових лімітів у SRS-NFR-SEC-08 (ліміти є лише для входу, запиту відновлення і повторного листа). API-REQ-01 надсилає лист на будь-яку дозволену корпоративну адресу, а це канал масового розсилання листів.
+>
+> - **N-16 [блокер]. BOLA через вкладені ідентифікатори.**
+>   - DF-01 крок 3 перевіряє лише роль у `courseId`. У DF-01 ніде не сказано, що `topicId` (крок 1) і `lectureMaterialId` (крок 5) належать цьому `courseId`. UC-02 крок 1 і AF-02C таку перевірку згадують, а DF її втратив.
+>   - Той самий клас проблем:
+>     - `sourceTestId` проти `controlEventId` / `courseId` (API-REQ-45);
+>     - `userId` має бути студентом курсу, а `topicId` — темою курсу (API-REQ-47);
+>     - `topicId` і `controlEventId` у тілі API-REQ-39;
+>     - `questionId` має належати спробі (API-REQ-41). Контракт має лише `option-not-in-question`, а випадку «питання не з цієї спроби» немає.
+>   - Наслідок: owner курсу A передає `lectureMaterialId` курсу B, текст чужої лекції йде в Claude API, а чернетки з'являються в курсі A.
+>   - Який статус повертати: 403 (SRS-NFR-SEC-05) чи 404? І чи розкриває 403 існування чужого UUID?
+>
+> - **N-17. Канал Socket.io (DF-01 крок 7, DF-02 крок 4).**
+>   - Не визначено, як access-токен передається під час handshake (табл. 2.11, SocketAuthMiddleware): у `auth`-пейлоаді чи в query-рядку `/socket.io/?…`. Другий варіант — це URL у журналах Caddy, тобто порушення того самого інваріанта.
+>   - DF-02 крок 4: подія прогресу містить `correct` і `q` (SRS-FUN-43), хоча REST-відповідь у кроці 5 правильність приховує. Єдиний бар'єр — членство в кімнаті лише для owner і co_instructor (SRS-FUN-44), а DF цього не фіксує.
+>   - Для спроби `daily_plan` `Attempt.courseId` дорівнює `null`, тож «кімната `course:{courseId}`» у кроці 4 не визначена. Контракт (`submitAnswer`) говорить про курс питання.
+>
+> ## 3. Упущені інфраструктурні інваріанти (Network Edge Cases)
+>
+> - **N-18 [блокер]. RateLimiter стоїть перед JwtAuthMiddleware (DF-01 крок 3, рис. 2.3), але ліміт — «100 запитів/хв на користувача».**
+>   - На цьому етапі `userId` ще не перевірено. Ключ береться з неперевіреного JWT? Тоді підробленим `sub` можна вичерпати ліміт жертви або обійти власний.
+>   - Або ключ — IP? Тоді який саме (див. N-19)?
+>   - Який ключ у публічних операцій, де користувача немає взагалі?
+>
+> - **N-19 [блокер]. IP клієнта за reverse proxy (DF-01 крок 2, DF-03 крок 2).**
+>   - Caddy проксує запити у внутрішній мережі docker-compose. Тому всі IP-ліміти SRS-NFR-SEC-08 (120/хв на IP для входу, 5/год на IP для відновлення) бачать IP контейнера Caddy, якщо не налаштовано довіру до `X-Forwarded-For`.
+>   - У 2.2–2.6 про це немає жодного слова.
+>   - Можливі наслідки: або спільний 429 для всіх користувачів, або, якщо довіряти `X-Forwarded-For` без обмежень, обхід лімітів підробкою заголовка.
+>   - Скільком проміжним вузлам довіряє Backend API?
+>
+> - **N-20. Max Body Size на межі мережі (DF-01 кроки 2–3).**
+>   - Для Caddy (Reverse Proxy, табл. 2.2.2) не описано обмеження тіла запиту. Єдиний ліміт — multer на частину `file`.
+>   - Не визначено:
+>     - ліміти не-файлових частин multipart (кількість частин, полів, `fieldSize`; `structure` до 200 елементів в API-REQ-32);
+>     - ліміт JSON-тіла для 24 JSON-операцій;
+>     - статус для їх перевищення (див. N-05).
+>   - Що відбувається з рештою потоку, коли multer обриває прийом на 10 МБ, а Caddy продовжує приймати?
+>
+> - **N-21. Важкий шлях завантаження (DF-01 кроки 3–4; API-REQ-30, 32).**
+>   - Де multer зберігає файл — у пам'яті чи на диску? Скільки паралельних завантажень по 10 МБ витримає процес?
+>   - Видобування тексту pdfjs у `worker_threads` іде синхронно в межах HTTP-запиту. Який розмір пулу, черга і тайм-аут?
+>   - Загальний ліміт 100 запитів/хв дозволяє близько 1 ГБ/хв з одного облікового запису. Окремого ліміту для API-REQ-30 і API-REQ-32 немає.
+>   - Тайм-аути Caddy ↔ Node для 10 МБ через мобільну мережу не задано. Це або обриви легітимних завантажень, або вектор slowloris.
+>   - API-REQ-30 не має `Idempotency-Key`. Якщо тайм-аут настав після збереження файлу, повторна спроба клієнта створить дублікат `lecture_materials`.
+>
+> - **N-22. Пропуски в DF-01, кроки 5–7.**
+>   - Немає перевірки `Idempotency-Key` у Redis і гілок 409 `idempotency-key-in-progress` / 422 `idempotency-key-mismatch` (`components.parameters.IdempotencyKey`, AF-02A).
+>   - Немає 503 за недоступності Redis (EF-02C).
+>   - Крок 7 обробляє лише `completed`, хоча JobEventsListener підписаний і на `failed`, а SRS-FUN-30 вимагає подію при остаточній невдачі.
+>   - Кімната «викладача» не названа; у SRS-FUN-30 це `user:{userId}`.
+>   - Немає резервного опитування API-REQ-34 (UC-02 крок 4: 90 с / 15 с). Доставка подій best-effort без резервного механізму означає, що клієнт може зависнути в очікуванні.
+>   - Крок 1 використовує префікс `/api/v1`, кроки 5 і 8 — ні.
+>
+> - **N-23. Пагінація.**
+>   - DF-01 крок 8 бере `page=1&limit=20` серед усіх чернеток курсу. Фільтра за `generationJobId` у `listQuestions` немає (є лише `status`, `topicId`), а `draftsCount` сягає 32767. Як викладач відокремить чернетки цієї задачі?
+>   - API-REQ-23 віддає теми без пагінації (`TopicList.maxItems: 500`), що суперечить правилу 2.5.1 «колекції повертаються сторінками».
+>   - API-REQ-46 (`Heatmap`): 100 рядків × до 500 клітинок плюс 500 тем — це до 50 000 клітинок в одній відповіді. Багатомегабайтний JSON іде в мобільну мережу, а стиснення відповідей ніде не згадано.
+>   - Offset-пагінація з `page ≤ 10000` і `limit ≤ 100` дає `OFFSET` до 999 900 плюс `COUNT(*)` для `total` на кожен запит. Чи це прийнятно для API-REQ-35 і API-REQ-46?
+>
+> - **N-24. CORS.**
+>   - Політику згадано лише як «CORS вимкнено» (табл. 2.11, SecurityHeaders). DF-01 крок 3 говорить про заголовки helmet і про CORS мовчить; матриця теж.
+>   - Що означає «вимкнено»: middleware відсутній і браузер блокує крос-доменні запити, чи дозвіл для всіх?
+>   - Socket.io має власну CORS-конфігурацію, яку helmet не покриває.
+>   - Чи буде браузерний клієнт (Expo web у розробці, статична сторінка AF-03E)? Через які middleware проходить preflight `OPTIONS` — через RateLimiter і JwtAuthMiddleware?
+>
+> - **N-25. Порядок перевірок і втрата відповідей (DF-02 кроки 2–3).**
+>   - DF-02 крок 2 успадковує «кроки 2–3 DF-01» разом із CourseRoleGuard, а для `/attempts/{attemptId}/answers` курсу в шляху немає (див. N-01).
+>   - Також за рис. 2.3 CourseRoleGuard стоїть до ValidationMiddleware. Тож у DF-01 некоректний `courseId` дійде до AccessPolicyService і PostgreSQL ще до валідації. Що повернеться: 400 чи 500?
+>   - Крок 3 перевіряє `deadlineAt` (422) раніше за статус (409). Який код отримає спроба, яку задача maintenance уже закрила зі статусом `expired`?
+>   - Що буде з відповідями, збереженими локально за EF-01C і надісланими повторно після `deadlineAt`: вони втрачаються з 422?
+>
+> - **N-26. Ліміти відновлення пароля (DF-03 кроки 2, 5).**
+>   - Ліміт «5 запитів/год на поштову адресу» дозволяє зловмиснику щогодини блокувати відновлення пароля для конкретної жертви. Цей ризик прийнято свідомо?
+>   - DF-03 крок 5 не згадує RateLimiter, хоча UC-03 крок 3 його декларує, а SRS-NFR-SEC-08 не задає для `/auth/password-reset/confirm` жодних чисел.
+
+### Рішення щодо зауважень
+
+| Зауваження | Рішення автора | Що змінено |
+|---|---|---|
+| N-01. Роль student без `courseId` у шляху (блокер) | Прийнято | Роль перевіряють PlanController і AttemptService (403); у `getDailyPlan` додано 403; виключений студент отримує 404 на свої спроби |
+| N-02. Обробники не збігаються з табл. 2.11 | Прийнято | Профіль — AuthController; mock_test — через MockTestService; відповідальність AttemptController, MockTestController, PrivacyController оновлено; Generation Worker винесено в DF-01 |
+| N-03. Зміст операції logout | Прийнято | Формулювання «сімейство токенів»; в описі `logout` — потреба чинного access-токена |
+| N-04. Матриця губить обмеження схем | Прийнято | Матрицю генерує скрипт з контракту: `pattern`, `uniqueItems`, `minProperties`, значення за замовчуванням, розкриті елементи масивів |
+| N-05. Неповний набір статусів | Прийнято | 400 для операцій з параметрами шляху або тілом, 413 і 415 для операцій з тілом; приклади 413 і 415 для JSON |
+| N-06. 400 для простроченого токена | Відхилено | Реакція клієнта однакова (запросити нове посилання), єдиний код не розкриває, чи існував токен |
+| N-07. `Location` на ресурси без GET | Прийнято | `Location` лише для курсу, спроби і задачі генерації; правило в 2.5.1 і в контракті |
+| N-08. Іменування ресурсів | Прийнято | Виняток групи Auth і підресурси-команди задекларовано в 2.5.1; пояснено 200 для `/answers` і `/events`, 204 для повторного відкликання коду |
+| N-09. Відсутні операції | Частково | Опис видалення облікового запису виправлено (409 `owner-has-courses`); DELETE тем і матеріалів, передача власності і перелік задач відхилено: SRS цього не вимагає |
+| N-10. `/health` поза матрицею | Прийнято | Примітка під табл. 2.15: Reverse Proxy шлях не публікує, лише healthcheck docker-compose |
+| N-11. Колізія `jobId` | Прийнято | DF-01 крок 6 і опис `createGenerationJob`: `GenerationJob.id` (UUID, `Location`) і ідентифікатор задачі BullMQ (`idempotency_key`) |
+| N-12. Перебір облікових записів через реєстрацію (блокер) | Прийнято | Реєстрація завжди 202, лист «обліковий запис уже існує»; 403 `email-not-verified` після перевірки пароля; SRS-FUN-01, 13-TBD |
+| N-13. Токен у query посилання (блокер) | Прийнято | Фрагмент `#token=…`, `Referrer-Policy: no-referrer`; SRS-FUN-01, SRS-FUN-55, UC-03, 13-TBD |
+| N-14. Секрети в журналах (блокер) | Прийнято | Redact у pino, журнал Reverse Proxy без query; SRS-NFR-OBS-01, VER-22 |
+| N-15. Діри мутуючих маршрутів | Прийнято | `POST /me/deletion` з паролем (13-TBD); ризик дії access-токенів до 15 хв після зміни пароля прийнято; ліміти для реєстрації, підтвердження і refresh у SRS-NFR-SEC-08 |
+| N-16. BOLA через вкладені ідентифікатори (блокер) | Прийнято | Перевірка належності курсу і спробі → 404; SRS-NFR-SEC-05, табл. 2.11, описи операцій |
+| N-17. Канал Socket.io | Прийнято | Токен у полі `auth` handshake; кімната курсу питання для `daily_plan`; членство лише owner і co_instructor (DF-02) |
+| N-18. RateLimiter до перевірки JWT (блокер) | Прийнято | IpRateLimiter і UserRateLimiter (рис. 2.3, табл. 2.11, 13-TBD) |
+| N-19. IP за reverse proxy (блокер) | Прийнято | `trust proxy` = 1; SRS-NFR-SEC-08, нотатки 10 і 14 |
+| N-20. Max Body Size | Прийнято | Reverse Proxy 11 МБ, JSON 100 КБ, multipart ≤ 3 частини, `structure` ≤ 64 КБ |
+| N-21. Важкий шлях завантаження | Прийнято | Тимчасовий файл на диску, пул pdfjs 2 потоки і тайм-аут 30 с, 20 завантажень/год; дублікат при повторі після тайм-ауту прийнято як ризик |
+| N-22. Пропуски DF-01 | Прийнято | Гілки ідемпотентності, 503, подія `failed`, кімната `user:{userId}`, резервне опитування, префікс `/api/v1` |
+| N-23. Пагінація | Частково | Фільтр `generationJobId`, gzip; теми без пагінації (≤ 500 за схемою) і offset-пагінацію прийнято для масштабу курсу |
+| N-24. CORS | Прийнято | CORS middleware не підключено (браузерного клієнта немає), Socket.io `cors: false` |
+| N-25. Порядок перевірок | Прийнято | Формат `courseId` перевіряє CourseRoleGuard до БД; статус спроби перевіряється до строку; відповіді після `deadlineAt` не враховуються |
+| N-26. Блокування відновлення лімітом | Відхилено (прийнятий ризик) | Ліміт 5 запитів/год на адресу захищає скриньку від масового розсилання |
+
+### Фінальна версія
+
+Підрозділи 2.5.3 і 2.5.4 [2_design.md](2_design.md): табл. 2.15 і потоки DF-01…DF-03. Змінено: [2_design.md](2_design.md) (рис. 2.3, табл. 2.11, 2.13, 2.14, підрозділи 2.5.1, 2.5.2, UC-03), [api/openapi.yaml](api/openapi.yaml) (реєстрація 202, `POST /me/deletion`, 400/413/415, `Location`, фільтр `generationJobId`, описи перевірок належності; `redocly lint` без помилок), [srs.md](srs.md) і PKM-копія (SRS-FUN-01, SRS-FUN-48, SRS-FUN-55, SRS-NFR-SEC-05, SRS-NFR-SEC-08, SRS-NFR-OBS-01, VER-07, VER-08, VER-17, VER-22), нотатки 10, 13, 14.
 
 ## Пов'язано
 

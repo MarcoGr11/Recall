@@ -37,6 +37,8 @@
 - Healthcheck: backend — PostgreSQL (стан Redis у полі `queue`), worker — PostgreSQL і Redis; контейнери зі статусом unhealthy автоматично не перезапускаються (поза MVP)
 - Backup Job: щоденний pg_dump і архів тому File Storage на окремий фізичний носій, зберігання 7 днів
 - CI: dependency-cruiser перевіряє правило залежностей шарів і межі модулів
+- Reverse Proxy (Caddy): `request_body max_size 11MB`, стиснення відповідей `encode gzip`, журнал доступу без query-рядка; шлях `/health` назовні не публікується (healthcheck docker-compose звертається до backend у внутрішній мережі); статичні сторінки universal link віддаються з `Referrer-Policy: no-referrer`
+- Backend API: `trust proxy` = 1 (довіра лише Reverse Proxy для `X-Forwarded-For`)
 
 ## Що свідомо НЕ додається (щоб не роздувати обсяг)
 
