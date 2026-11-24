@@ -12,6 +12,7 @@ coverage/
 .idea/
 .vscode/
 .claude/
+CLAUDE.md
 .mcp.json
 docs/.obsidian/
 
