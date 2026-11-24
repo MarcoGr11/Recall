@@ -1,0 +1,56 @@
+# Docs Quality Gate: перевірка Markdown-розмітки (markdownlint) і стилю тексту (Vale)
+# для каталогу docs і кореневого README на кожному Pull Request у main.
+name: Docs Quality Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "README.md"
+      - ".markdownlint.jsonc"
+      - ".markdownlint-cli2.jsonc"
+      - ".vale.ini"
+      - ".vale/**"
+      - ".github/workflows/docs-linter.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-linter-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  markdownlint:
+    name: markdownlint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: DavidAnson/markdownlint-cli2-action@3ce8f712b5d8f31acd8e201be6d97e3d2bb23eb7 # v25.1.0
+        with:
+          globs: |
+            docs/**/*.md
+            README.md
+
+  vale:
+    name: Vale
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: errata-ai/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3.0.0
+        with:
+          version: 3.28.1
+          files: all
+          sync: false
+          reporter: github-pr-annotations
+          filter_mode: nofilter
+          min_alert_level: error
+          fail_on_error: true

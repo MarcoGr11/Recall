@@ -1,0 +1,10 @@
+// Межі перевірки markdownlint-cli2: каталог docs і кореневий README.
+{
+  "globs": ["docs/**/*.md", "README.md"],
+  "ignores": [
+    // Протоколи взаємодії з ШІ і відгуки керівника містять дослівні звіти аудиторів і не редагуються (CLAUDE.md).
+    "docs/17-AI Insights.md",
+    "docs/18-Supervisor Feedback.md",
+    "docs/.obsidian/**"
+  ]
+}
