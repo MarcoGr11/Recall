@@ -10,7 +10,7 @@
 | [1_analysis.md](1_analysis.md) | Розділ 1. Аналіз предметної області та постановка задачі |
 | [2_design.md](2_design.md) | Розділ 2. Обґрунтування архітектурних рішень та проєктування системи: ADR (2.1), C4 Level 1–2 (2.2), C4 Level 3 (2.3), контракт API (2.5), ERD (2.7), алгоритми (2.8), інтеграційний аудит (2.9) |
 | [srs.md](srs.md) | Додаток А. Software Requirements Specification за ISO/IEC/IEEE 29148 (SRS-FUN, SRS-NFR, сценарії верифікації) |
-| [adr/](adr/) | Architecture Decision Records: [ADR-001](adr/0001-choice-of-technology.md) — асинхронна генерація контенту, BullMQ на Redis |
+| [adr/](adr/) | Architecture Decision Records: [ADR-001](adr/0001-choice-of-technology.md) — асинхронна генерація контенту, BullMQ на Redis; [ADR-002](adr/0002-modular-monolith.md) — модульний моноліт за Ports and Adapters |
 | [api/openapi.yaml](api/openapi.yaml) | Контракт REST API в OpenAPI 3.0.3: 47 операцій, JWT Bearer, помилки RFC 9457 |
 | [3_implementation.md](3_implementation.md) | Розділ 3. Програмна реалізація та тестування |
 | [4_conclusions.md](4_conclusions.md) | Висновки |
@@ -43,7 +43,7 @@ Markdown-версія розділу — [1_analysis.md](1_analysis.md); дже�
 | NFR-04/05 | Асинхронність | Постановка задачі: 202 Accepted ≤ 200 мс; обробка ≤ 90 с, 3 спроби, dead-letter queue | k6, журнал BullMQ |
 | NFR-06/07 | Безпека | JWT (access 15 хв, refresh 30 днів з ротацією), Argon2id (m = 19 456 KiB, t = 2, p = 1), RBAC за role_in_course → 403 | інтеграційні тести |
 | NFR-09 | Безпека | 0 Critical/High у npm audit і Trivy; Quality Gate SonarQube Cloud passed | GitHub Actions |
-| NFR-10/11 | Надійність | ACID-транзакція «відповідь + ReviewState»; pg_dump щодня, RPO ≤ 24 год, RTO ≤ 1 год | тести, тестове відновлення |
+| NFR-10/11 | Надійність | ACID-транзакція «відповідь + ReviewState»; pg_dump і архів PDF щодня, RPO ≤ 24 год, RTO ≤ 1 год | тести, тестове відновлення |
 | NFR-12 | Інфраструктура | backend, worker, PostgreSQL, Redis у docker-compose з healthcheck | `docker compose up` |
 
 ## Календарний план

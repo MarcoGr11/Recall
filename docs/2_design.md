@@ -2,24 +2,122 @@
 
 ## 2.1. Обґрунтування архітектурного стилю та патернів проєктування
 
-### 2.1.1. ADR-001. Асинхронна обробка генерації контенту через Claude API: BullMQ на Redis
+Підрозділ обґрунтовує глобальний стиль серверної частини (2.1.1), патерни рівня коду (2.1.2) і рішення про асинхронну генерацію контенту (2.1.3). Архітектурні рішення фіксуються у форматі Architecture Decision Record (ADR) за шаблоном M. Nygard: контекст, альтернативи, рішення, наслідки, статус. Кожен ADR зберігається окремим файлом у каталозі [adr/](./adr/) і не редагується після затвердження; зміна рішення оформлюється новим ADR зі статусом Superseded для попереднього. Протокол архітектурного аудиту підрозділу — [17-AI Insights.md](./17-AI%20Insights.md), Запис 21.
 
-Архітектурні рішення фіксуються у форматі Architecture Decision Record (ADR) за шаблоном M. Nygard: контекст, альтернативи, рішення, наслідки, статус. Кожен ADR зберігається окремим файлом у каталозі [adr/](./adr/) і не редагується після затвердження; зміна рішення оформлюється новим ADR зі статусом Superseded для попереднього. Нижче наведено текст [ADR-001](./adr/0001-choice-of-technology.md); протокол рецензії — [17-AI Insights.md](./17-AI%20Insights.md), Запис 14.
+### 2.1.1. Глобальний архітектурний стиль: модульний моноліт
+
+Стиль визначають чотири вимоги SRS і обмеження проєкту ([ADR-002](./adr/0002-modular-monolith.md)). Завершення спроби змінює дані двох предметних областей — результати тестування і стан повторення ReviewState — і за [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) має виконуватися однією ACID-транзакцією. [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01), [SRS-NFR-PERF-02](./srs.md#srs-nfr-perf-02) і [SRS-NFR-RT-01](./srs.md#srs-nfr-rt-01) обмежують кількість мережевих переходів у шляху запиту і події. [SRS-NFR-MAINT-01](./srs.md#srs-nfr-maint-01) вимагає ≥ 70 % покриття рядків і гілок модулів SM-2 і пріоритизації плану, що досяжно лише за тестування цих модулів без PostgreSQL і Redis. Обмеження: соло-розробка тривалістю 6 місяців, один хост docker-compose (4 vCPU, 8 ГБ RAM), один потік до 100 студентів, відсутність хмарного бюджету. Альтернативи порівняно в табл. 2.1.
+
+Таблиця 2.1 – Порівняння архітектурних стилів серверної частини (ADR-002)
+
+| Критерій (вага) | Шаровий моноліт | Модульний моноліт, Ports and Adapters | Мікросервіси | Backend as a Service (Supabase) |
+|---|---|---|---|---|
+| REL-01: атомарність завершення спроби (0,25) | 5 | 5 | 2 — Saga, ReviewState узгоджується в кінцевому підсумку | 3 — логіка в функціях PostgreSQL |
+| PERF-01, PERF-02, RT-01: мережеві переходи (0,20) | 5 | 5 | 2 — виклик сервісу courses для перевірки ролі, брокер подій | 3 |
+| MAINT-01: тестування Core без інфраструктури (0,20) | 2 — сервіси залежать від Kysely | 5 | 4 | 2 |
+| INFRA-01: ресурси одного хоста (0,15) | 5 | 4 | 1 — ≥ 13 контейнерів | 4 |
+| Трудомісткість для одного розробника (0,10) | 5 | 4 | 1 | 3 |
+| Контроль над персональними даними (0,10) | 5 | 5 | 5 | 2 — дані в хмарі провайдера |
+| **Зважена сума** | **4,40** | **4,75** | **2,45** | **2,85** |
+
+Мікросервіси виключає вимога SRS-NFR-REL-01: розподілена транзакція між сервісами testing і scheduling реалізується лише Saga з компенсувальними діями, і студент може отримати результат спроби до оновлення плану повторення. Шаровий моноліт виконує вимоги продуктивності, але прив'язує SM-2 і пріоритизацію до драйвера бази даних, тому кожен тест критичних модулів потребує PostgreSQL, а Generation Worker не може повторно використати сервіси без залежності від Express. Обрано модульний моноліт з архітектурою Ports and Adapters (варіант Clean Architecture) усередині модулів.
+
+Модуль — це каталог коду з власними сервісами Core, портами і таблицями схеми даних. Розподіл компонентів рис. 2.4 і таблиць рис. 2.5 за модулями наведено в табл. 2.2.
+
+Таблиця 2.2 – Модулі серверної частини
+
+| Модуль | Компоненти Core | Таблиці-власність |
+|---|---|---|
+| identity | AuthService | users, email_verification_tokens, password_reset_tokens, refresh_tokens |
+| courses | CourseService, InvitationService, AccessPolicyService, ContentAuditLog | courses, course_members, invite_codes, topics, control_events, control_event_topics, lecture_materials, source_tests, source_test_structure, audit_log |
+| generation | GenerationJobService, BudgetGuard, ModerationService | generation_jobs, questions, question_options |
+| testing | TestDeliveryService, AttemptService, QualityScorer, MockTestService | attempts, attempt_questions, answers, answer_options, mock_tests |
+| scheduling | SM2Scheduler, PlanAllocator, DailyPlanPrioritizer | review_states |
+| monitoring | MasteryService, AntiCheatEventService, ProgressPublisher | attempt_events, mastery_confirmations |
+| privacy | PrivacyService | — (видалення через порти identity і monitoring) |
+| platform | HealthService | — |
+
+Правила меж модулів:
+- запис у таблицю виконують лише порти модуля-власника; читання таблиць іншого модуля — лише через його порти читання (IQuestionReadRepository, ICourseRepository);
+- модуль викликає інший модуль лише через публічні сервіси Core (файл `index.js` модуля), а не через його внутрішні компоненти;
+- єдиний виняток — транзакція завершення спроби: AttemptService (testing) записує ReviewState через IReviewStateRepository модуля scheduling у тій самій транзакції. Саме ця вимога атомарності є причиною спільної схеми PostgreSQL для всіх модулів.
+
+Спільна схема означає, що модулі не розгортаються незалежно; винесення модуля в окремий сервіс не є метою проєкту. Правило залежностей Inbound → Core → Ports ← Outbound і правила меж модулів перевіряються в CI статичним аналізом імпортів dependency-cruiser: сервер написано на JavaScript, і компілятор правило залежностей не перевіряє. Порушення (наприклад, імпорт `kysely` або `express` у сервісі Core) зупиняє конвеєр CI.
+
+**Процеси і масштабування.** Код виконується у двох процесах з однієї кодової бази й одного образу контейнера: Backend API і Generation Worker. Окремий процес worker обґрунтовано в ADR-001 (підрозділ 2.1.3): повтори з затримкою, dead-letter queue, ліміт паралелізму ([SRS-NFR-ASYNC-04](./srs.md#srs-nfr-async-04)), збереження стану черги ([SRS-NFR-REL-04](./srs.md#srs-nfr-rel-04)) та ізоляція ключа Claude API в одному контейнері. Очікування відповіді Claude API саме по собі event loop Node.js не блокує, тому аргументом на користь окремого процесу не є. Backend API працює в одному екземплярі: шина доменних подій ProgressPublisher, лічильники rate limiting і кімнати Socket.io зберігаються в пам'яті процесу. Масштабування — вертикальне, у межах ресурсів хоста; другий екземпляр потребує адаптера Socket.io для Redis, сховища лічильників у Redis і доставки доменних подій між процесами, тому перехід до кількох екземплярів є умовою перегляду ADR-002.
+
+**Ресурси хоста.** Обмеження ресурсів контейнерів у docker-compose: Backend API — 1,5 vCPU і 768 МБ, Generation Worker — 1 vCPU і 512 МБ, PostgreSQL — 1 vCPU і 2 ГБ, Redis — 0,25 vCPU і 256 МБ, Reverse Proxy — 0,25 vCPU і 128 МБ; сума не перевищує 4 vCPU, тому навантаження worker не забирає процесор у PostgreSQL. CPU-важкі операції Backend API виконуються поза event loop: хешування Argon2id — у пулі потоків libuv (`UV_THREADPOOL_SIZE = 4` задається явно), вилучення тексту PDF для перевірки [SRS-FUN-51](./srs.md#srs-fun-51) — в окремому потоці `worker_threads`. Текст PDF вилучається двічі: Backend API перевіряє обмеження до збереження файлу, Generation Worker вилучає текст повторно під час генерації (підрозділ 2.8.3). Повторне вилучення (до 1 с процесорного часу на документ до 60 сторінок) прийнято замість зберігання тексту в окремому сховищі. Міграції схеми виконує одноразовий сервіс `migrate` (Kysely Migrator) до запуску Backend API і Generation Worker (`depends_on: condition: service_completed_successfully`); міграції сумісні з попередньою версією коду (спершу розширення схеми, видалення — наступним випуском), оновлення не виконується під час контрольних заходів.
+
+Механізми, якими стиль забезпечує нефункціональні вимоги, наведено в табл. 2.3. Значення затримок — оцінка для умов вимірювання SRS (4 vCPU, набір даних 100 студентів); перевірка — сценарії VER-01…VER-04.
+
+Таблиця 2.3 – Відповідність нефункціональних вимог механізмам архітектури
+
+| Вимога | Механізм | Оцінка і вузьке місце |
+|---|---|---|
+| [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01): читання, p95 ≤ 300 мс при 50 RPS | Один процес, виклики між модулями без мережі; перевірка ролі одним запитом за первинним ключем course_members; індекси підрозділу 2.7.2 | Reverse Proxy ≤ 5 мс, JWT ≤ 1 мс, перевірка ролі ≤ 5 мс, до 5 запитів SQL ≤ 60 мс, серіалізація ≤ 10 мс: ≈ 80 мс; запас ≈ 220 мс на конкуренцію за процесор хоста. Вузьке місце — процесор під час піку входів (Argon2id) і генерації |
+| [SRS-NFR-PERF-02](./srs.md#srs-nfr-perf-02): запис відповіді і завершення спроби, p95 ≤ 500 мс | Одна транзакція PostgreSQL: блокування спроби, перерахунок ≤ 15 тем, UPSERT ReviewState, COMMIT; подія — після COMMIT | ≈ 100 мс: до 15 операторів UPSERT ≈ 30 мс, COMMIT з fsync ≈ 10 мс. Вузьке місце — конкуренція блокувань рядків review_states при одночасному завершенні спроб одного студента (виключено 409 для другої спроби того самого режиму) |
+| [SRS-NFR-RT-01](./srs.md#srs-nfr-rt-01): подія прогресу p95 ≤ 1 с | Observer у межах процесу: ProgressPublisher → ProgressGateway → кімната `course:{courseId}`, без брокера | Затримка визначається мережею клієнта; серверна частина ≤ 10 мс |
+| [SRS-NFR-ASYNC-01](./srs.md#srs-nfr-async-01): 202, p95 ≤ 200 мс | ADR-001: запис GenerationJob, постановка в чергу BullMQ, виклик Claude API — у Generation Worker | BudgetGuard (сума за індексом `generation_jobs_created_idx`), INSERT і постановка в Redis ≈ 20 мс. Залежність від Redis: за його недоступності — 503 з Retry-After |
+| [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01): атомарність завершення спроби | Спільна схема PostgreSQL, Unit of Work (підрозділ 2.1.2) | — |
+| [SRS-NFR-MAINT-01](./srs.md#srs-nfr-maint-01): ≥ 70 % рядків і гілок | Ports and Adapters; чисті функції QualityScorer, SM2Scheduler, PlanAllocator | Unit-тести без контейнерів; порти — підробки в пам'яті |
+| [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05): контроль доступу на сервері | AccessPolicyService — єдина точка визначення role_in_course для CourseRoleGuard (REST) і ProgressGateway (Socket.io) | — |
+
+**Ризики стилю і рішення щодо них.**
+- **Хост — єдина точка відмови.** Усі контейнери розміщено на одному хості, і цільова доступність у SRS не задана: це прийнятий ризик для апробації в одному потоці. Backup Job щодоби копіює дамп PostgreSQL і том File Storage з PDF на окремий фізичний носій ([SRS-NFR-REL-03](./srs.md#srs-nfr-rel-03)), тому після відновлення записи бази даних не посилаються на відсутні файли. Серверний таймер спроби задано полем `deadline_at`: після перезапуску спроби, строк яких минув, завершуються задачею `maintenance` (підрозділ 2.3.2).
+- **Залежність від Redis.** За недоступності Redis постановка задач генерації повертає 503, тестування, план повторення і моніторинг працюють. Тому GET /health Backend API повертає 200 за доступності PostgreSQL і повідомляє стан черги окремим полем, а GET /health Generation Worker вимагає PostgreSQL і Redis ([SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02)). docker-compose не перезапускає контейнер зі статусом unhealthy: healthcheck використовується для порядку запуску і спостереження, автоматичний перезапуск unhealthy-контейнерів — поза MVP.
+- **Узгодженість PostgreSQL і Redis.** Запис GenerationJob і постановка в чергу не атомарні. Щохвилинна задача `maintenance` повторно ставить у чергу задачі в стані queued, старші за 1 хв, з тим самим jobId; отже «загублена» задача виявляється не пізніше ніж за 2 хв. Подія `completed` надсилається після COMMIT статусу задачі в generation_jobs, тому запит стану після події не повертає queued (ADR-001).
+- **Доставка подій між процесами.** ProgressPublisher працює в межах процесу. Події процесу Generation Worker (завершення задачі генерації, автоматичне завершення спроби) доходять до Backend API лише через BullMQ QueueEvents: задача `maintenance` повертає перелік завершених спроб, JobEventsListener публікує подію в кімнати курсів питань спроби.
+- **Витрати на Claude API (FinOps).** Добовий ліміт 2 USD ([SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02)) перевіряється за сумою фактичної вартості задач доби і резерву задач у станах queued і processing; резерв задачі — найгірша оцінка 0,024 USD (ADR-001). Без резерву 200 одночасних постановок за нульових фактичних витрат пройшли б перевірку і перевищили ліміт до 2,4 раза; з резервом перевищення обмежене похибкою оцінки вартості. Ліміт діє на всю систему; квота на викладача — поза MVP.
+- **Синхронний виклик SMTP-провайдера.** Лист підтвердження або відновлення надсилається після COMMIT і після відповіді клієнту, з тайм-аутом з'єднання 10 с; збій журналюється без повтору, користувач повторює запит (`/auth/verify-email/resend`, `/auth/password-reset/request`) у межах [SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08). Обробник запиту не утримується на час доставки листа.
+- **Сесії мобільного клієнта.** Клієнт виконує не більше одного оновлення токенів одночасно: паралельні запити з простроченим access-токеном очікують результату одного запиту `/auth/refresh`, тому reuse detection ([SRS-NFR-SEC-02](./srs.md#srs-nfr-sec-02)) не відкликає сесію через гонку. Після закінчення строку дії access-токена сервер надсилає з'єднанню Socket.io подію `auth.expired` і розриває його; клієнт підключається повторно з новим токеном і перезапитує стан панелі через REST, оскільки пропущені за час розриву події не повторюються.
+- **Навантаження каналу Socket.io.** Роль користувача перевіряється під час приєднання до кімнати; вилучення учасника з курсу негайно виключає його з'єднання з кімнати, а строк дії токена перевіряється на кожній події без звернення до бази даних ([SRS-FUN-44](./srs.md#srs-fun-44)). Події клієнта обмежено 60 подіями за хвилину на з'єднання ([SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08)). Пік входів на початку контрольного заходу: 100 хешувань Argon2id по ≈ 40 мс процесорного часу в 4 потоках — ≈ 1 с черги.
+
+### 2.1.2. Патерни рівня коду
+
+Патерни, застосовані в сервісах Backend API і Generation Worker, і проблему зв'язності, яку розв'язує кожен з них, наведено в табл. 2.4.
+
+Таблиця 2.4 – Патерни рівня коду
+
+| Патерн | Де застосовано | Яку проблему розв'язує | Межа застосування |
+|---|---|---|---|
+| Ports and Adapters (Dependency Inversion) | Інтерфейси портів визначено в Core, реалізації — в Outbound (рис. 2.4) | Core не залежить від Express, Socket.io, Kysely, BullMQ і nodemailer; доменна логіка тестується з підробками портів | Порти описано JSDoc; дотримання перевіряють тести і dependency-cruiser |
+| Composition Root, впровадження залежностей через конструктор | `api.js` і `worker.js`; обидва збирають Core однією фабрикою `createCore(adapters)` | Створення і конфігурація адаптерів в одному місці кожного процесу; підміна адаптерів у тестах (підробки в пам'яті, заглушка Claude API nock) | DI не зменшує кількість залежностей сервісу (AttemptService має шість), а робить їх явними; DI-контейнер не використовується |
+| Repository | Pg*Repository за портами I*Repository | SQL зосереджено в Outbound; сервіси Core тестуються з репозиторіями в пам'яті | Заміна СКБД не є метою: коректність спирається на транзакції й обмеження UNIQUE PostgreSQL ([SRS-NFR-SEC-12](./srs.md#srs-nfr-sec-12)). ICourseRepository спільний для п'яти сервісів: курс і членство в ньому — одне джерело даних, поділ дав би п'ять інтерфейсів з однією реалізацією |
+| Unit of Work | `ITransactionManager.run(fn)`; поточна транзакція зберігається в AsyncLocalStorage, репозиторії беруть її з контексту | Атомарність операцій з кількома записами без передавання об'єкта транзакції Kysely в Core: завершення спроби ([SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01)), модерація з записом у журнал аудиту, видалення облікового запису ([SRS-FUN-48](./srs.md#srs-fun-48)), створення матеріалу з записом у журнал | Файлова система не транзакційна: PDF записується до транзакції і видаляється при її відкаті; файл без запису після аварійного завершення процесу — прийнятий ризик (недоступний клієнту) |
+| Observer | ProgressPublisher (EventEmitter) → ProgressGateway | Сервіси Core не залежать від Socket.io; подія прогресу публікується без брокера | `emit` викликається лише після COMMIT і викликає слухачів синхронно, тому слухач ProgressGateway лише планує надсилання (`setImmediate`) і перехоплює винятки: збій доставки не впливає на відповідь студенту. Доставка best-effort, у межах процесу; між процесами — BullMQ QueueEvents |
+| Adapter | IMailSender: SmtpMailSender, ConsoleMailSender; IPdfTextExtractor: PdfjsTextExtractor | Зовнішні бібліотеки і сервіси ізольовано за портом; для dev і test лист записується в журнал | Адаптер обирається під час запуску змінною `MAIL_TRANSPORT`; при `NODE_ENV=production` і значенні, відмінному від `smtp`, процес не запускається, тому одноразові токени не потрапляють у журнали |
+| Функціональне ядро (чисті функції) | QualityScorer, SM2Scheduler, PlanAllocator; DailyPlanPrioritizer завантажує дані і передає їх PlanAllocator | Детермінована логіка без I/O: покриття [SRS-NFR-MAINT-01](./srs.md#srs-nfr-maint-01) досягається unit-тестами | Вибірка кандидатів і питань (I/O) перевіряється інтеграційними тестами |
+| Chain of Responsibility | Ланцюжок middleware Express (рис. 2.3) | Безпека, валідація і обробка помилок відокремлені від контролерів; порядок перевірок фіксований | Бізнес-обмеження (ліміти PDF, бюджет) — у Core, middleware перевіряє лише транспорт і формат |
+| Idempotent Consumer | jobId BullMQ := idempotency_key; UNIQUE (generation_job_id, position); UNIQUE (attempt_id, question_id) | Повторна доставка задачі або повторний запит не створює дублікатів ([SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02)) | Повторна тарифікація Claude API після аварійного завершення worker — прийнятий ризик (ADR-001) |
+
+Доменні помилки Core (наприклад, `BudgetExceededError` у BudgetGuard, `PdfTooLongError` у CourseService) не містять HTTP-кодів; відображення в коди 422, 429 і формат RFC 9457 виконує ErrorHandler.
+
+Не застосовано:
+- CQRS і Event Sourcing — немає асиметрії навантаження читання і запису при 50 RPS і однієї бази даних;
+- Saga — єдина транзакція PostgreSQL виконує SRS-NFR-REL-01;
+- Circuit Breaker для Claude API — паралелізм обмежено двома задачами, кожен виклик має тайм-аут 60 с і не більше 3 спроб ([SRS-NFR-ASYNC-03](./srs.md#srs-nfr-async-03)), тому каскадний збій неможливий;
+- Singleton — пул з'єднань PostgreSQL і з'єднання Redis створюються один раз у корені композиції кожного процесу.
+
+Бюджет з'єднань: пул PostgreSQL — 10 з'єднань у Backend API і 5 у Generation Worker, разом з Backup Job і `migrate` — не більше 17 з 100 (`max_connections` за замовчуванням). Redis: Backend API — 3 з'єднання (Queue і два QueueEvents для черг generation і maintenance), Generation Worker — 4 (два Worker з блокувальними з'єднаннями, Queue для повторної постановки, перевірка працездатності).
+
+### 2.1.3. ADR-001. Асинхронна обробка генерації контенту через Claude API: BullMQ на Redis
+
+Нижче наведено текст [ADR-001](./adr/0001-choice-of-technology.md); протокол рецензії — [17-AI Insights.md](./17-AI%20Insights.md), Запис 14.
 
 <!-- adr-001:start -->
 
 **Status:** Approved
 **Date:** 10.11.2026; уточнення 24.11.2026 (розділ «Історія змін»)
 **Автор рішення:** MarcoGr11
-**Пов'язані артефакти:** [srs.md](./srs.md), підрозділи 2.2.2, 2.3
+**Пов'язані артефакти:** [srs.md](./srs.md), [2_design.md](./2_design.md) — підрозділи 2.1.3, 2.2.2, 2.3
 
 #### Context
 
 Викладач завантажує PDF лекції або зразок тесту, після чого система генерує чернетку тесту, сценарію або тренувальних питань через Claude API ([SRS-FUN-22](./srs.md#srs-fun-22)…[SRS-FUN-27](./srs.md#srs-fun-27), [SRS-FUN-31](./srs.md#srs-fun-31)). Тривалість одного виклику Claude API для генерації тесту за лекцією оцінюється до 60 с на рівні p95 (timeout одного виклику — 60 с за [SRS-NFR-ASYNC-03](./srs.md#srs-nfr-async-03)); провайдер повертає помилки HTTP 429 (rate limit) і 5xx (перевантаження).
 
-Вимоги, що визначають рішення, наведено в табл. 2.1.
+Вимоги, що визначають рішення, наведено в табл. 2.5.
 
-Таблиця 2.1 – Вимоги, що визначають рішення ADR-001
+Таблиця 2.5 – Вимоги, що визначають рішення ADR-001
 
 | Вимога | Метрика |
 |---|---|
@@ -65,7 +163,7 @@ HTTP-з'єднання утримується на весь час виклик�
 
 ##### Матриця оцінки
 
-Таблиця 2.2 – Оцінка альтернатив за критеріями (+ — задовольняє засобами інструмента; ± — задовольняє власним кодом або конфігурацією; − — не задовольняє)
+Таблиця 2.6 – Оцінка альтернатив за критеріями (+ — задовольняє засобами інструмента; ± — задовольняє власним кодом або конфігурацією; − — не задовольняє)
 
 | Критерій | Синхронний виклик | In-process | PostgreSQL (pg-boss) | RabbitMQ | BullMQ на Redis |
 |---|---|---|---|---|---|
@@ -91,8 +189,8 @@ HTTP-з'єднання утримується на весь час виклик�
 6. Redis працює з `appendonly yes`, `appendfsync everysec`.
 
 Аргументи рішення:
-- вирішальний критерій — [SRS-FUN-30](./srs.md#srs-fun-30): BullMQ надає події стану задачі (QueueEvents: completed, failed) без власного коду, тоді як для pg-boss потрібні LISTEN / NOTIFY і власна логіка (табл. 2.2);
-- pg-boss має перевагу, якої це рішення не отримує: постановку задачі в одній транзакції PostgreSQL із записом GenerationJob. Для BullMQ розбіжність Redis і PostgreSQL усувається порядком «запис queued → enqueue» і узгодженням при старті worker (розділ Consequences); для MVP з одним типом задач цю ціну визнано прийнятною;
+- вирішальний критерій — [SRS-FUN-30](./srs.md#srs-fun-30): BullMQ надає події стану задачі (QueueEvents: completed, failed) без власного коду, тоді як для pg-boss потрібні LISTEN / NOTIFY і власна логіка (табл. 2.6);
+- pg-boss має перевагу, якої це рішення не отримує: постановку задачі в одній транзакції PostgreSQL із записом GenerationJob. Для BullMQ розбіжність Redis і PostgreSQL усувається порядком «запис queued → enqueue» і щохвилинним узгодженням (розділ Consequences); для MVP з одним типом задач цю ціну визнано прийнятною;
 - не потребує окремого брокера повідомлень: Redis 7 — єдиний додатковий сервіс інфраструктури черги;
 - Generation Worker є єдиним споживачем Claude API, тому облік і обмеження вартості (SRS-NFR-COST-01, SRS-NFR-COST-02) зосереджено в одній точці, а ключ Claude API передається лише в цей контейнер.
 
@@ -110,9 +208,9 @@ HTTP-з'єднання утримується на весь час виклик�
 - **Redis — єдина точка відмови черги.** При недоступності Redis постановка задач неможлива: Backend API повертає 503 із заголовком Retry-After, обробка зупиняється, події QueueEvents не доставляються. Тестування, план повторення і live-моніторинг продовжують працювати. Зменшення ризику: healthcheck ([SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02)), `restart: unless-stopped`, відновлення стану з AOF. Висока доступність (Redis Sentinel) не реалізується через обмеження одного хоста.
 - **Семантика доставки at-least-once.** Задача, worker якої завершився аварійно після виклику Claude API, але до підтвердження, обробляється повторно (stalled job). Наслідки: ризик дубліката чернетки і повторна тарифікація виклику. Зменшення ризику: ідемпотентність за idempotency_key і обмеження UNIQUE (generation_job_id, position) для чернеток у PostgreSQL. Повторна тарифікація при аварійному завершенні — прийнятий ризик.
 - **Потреба в AOF persistence.** Без AOF перезапуск контейнера Redis втрачає задачі. З `appendfsync everysec` втрачається до 1 с записів; ціна — додатковий запис на диск і зростання файлу AOF, що потребує періодичного перезапису (`auto-aof-rewrite`).
-- **Розбіжність стану Redis і PostgreSQL.** Запис GenerationJob у PostgreSQL і постановка в чергу Redis не атомарні. Порядок «запис queued → enqueue з тим самим jobId» і узгодження при старті worker (повторна постановка записів queued без задачі в Redis) усувають розбіжність без transactional outbox.
+- **Розбіжність стану Redis і PostgreSQL.** Запис GenerationJob у PostgreSQL і постановка в чергу Redis не атомарні. Порядок «запис queued → enqueue з тим самим jobId» і щохвилинне узгодження задачею черги maintenance (повторна постановка записів queued, старших за 1 хв, з тим самим jobId) усувають розбіжність без transactional outbox; «загублена» задача виявляється не пізніше ніж за 2 хв. Worker фіксує стан задачі в generation_jobs до її завершення в BullMQ, тому подія completed не випереджає COMMIT.
 - **Ускладнення тестування.** Інтеграційні тести потребують Redis у контейнері, заглушки Claude API (nock) з керованими відмовами і очікування стану задачі; затримки backoff задаються конфігурацією, щоб тести не чекали 5 с і 10 с; час CI зростає (сценарій VER-05).
-- **FinOps — вартість токенів Claude API.** Модель — Claude Haiku 5.5 (`claude-haiku-5-5`), тариф станом на 24.11.2026 за офіційною сторінкою Anthropic Pricing: 0,10 USD / 0,50 USD за 1M вхідних / вихідних токенів для запитів до 100 000 токенів (понад 100 000 — 0,50 USD / 2,50 USD). Ліміт вилученого тексту 40 000 токенів ([SRS-FUN-51](./srs.md#srs-fun-51)) разом із системними інструкціями утримує кожен запит у нижньому тарифному діапазоні. Типова задача генерації тесту за лекцією ≈ 20 000 вхідних і 4 000 вихідних токенів ≈ 0,004 USD; верхня межа одного виклику (≈ 42 000 вхідних токенів, `max_tokens` = 8 000) ≈ 0,008 USD, з урахуванням 3 спроб — не більше 0,024 USD. Добовий ліміт 2 USD відповідає ≈ 500 типовим задачам або ≈ 83 задачам у найгіршому випадку. Контроль: `max_tokens` на виклик, BudgetGuard, облік tokens_in, tokens_out, cost_usd у generation_jobs. Оцінку слід перевірити за фактичними даними після перших 20 задач (сценарій VER-06).
+- **FinOps — вартість токенів Claude API.** Модель — Claude Haiku 5.5 (`claude-haiku-5-5`), тариф станом на 24.11.2026 за офіційною сторінкою Anthropic Pricing: 0,10 USD / 0,50 USD за 1M вхідних / вихідних токенів для запитів до 100 000 токенів (понад 100 000 — 0,50 USD / 2,50 USD). Ліміт вилученого тексту 40 000 токенів ([SRS-FUN-51](./srs.md#srs-fun-51)) разом із системними інструкціями утримує кожен запит у нижньому тарифному діапазоні. Типова задача генерації тесту за лекцією ≈ 20 000 вхідних і 4 000 вихідних токенів ≈ 0,004 USD; верхня межа одного виклику (≈ 42 000 вхідних токенів, `max_tokens` = 8 000) ≈ 0,008 USD, з урахуванням 3 спроб — не більше 0,024 USD. Добовий ліміт 2 USD відповідає ≈ 500 типовим задачам або ≈ 83 задачам у найгіршому випадку. Контроль: `max_tokens` на виклик, BudgetGuard з резервом найгіршої вартості 0,024 USD на кожну задачу в станах queued і processing (без резерву одночасні постановки за нульових фактичних витрат проходять перевірку), облік tokens_in, tokens_out, cost_usd у generation_jobs. Оцінку слід перевірити за фактичними даними після перших 20 задач (сценарій VER-06).
 - **Очікування переноситься в інтерфейс.** Викладач отримує результат через 10–90 с; інтерфейс повинен показувати стан задачі, а система — доставляти подію завершення (SRS-FUN-30), що створює залежність від каналу WebSocket.
 - **Додатковий процес.** Generation Worker і Redis — два додаткові контейнери в docker-compose з власними healthcheck.
 
@@ -132,6 +230,7 @@ HTTP-з'єднання утримується на весь час виклик�
 
 - 24.11.2026 — уточнення без зміни рішення: ключ ідемпотентності доповнено номером генерації generation_no (знахідка 10 незалежного аудиту); модель Claude Haiku 4.5 замінено на Claude Haiku 5.5 з перерахунком оцінки вартості; облік токенів і вартості перенесено з generation_log у generation_jobs; статус чернетки pending перейменовано на draft. Рішення автора — [17-AI Insights.md](./17-AI%20Insights.md), Запис 16.
 - 24.11.2026 — уточнення без зміни рішення за результатами нормоконтролю алгоритмів: затримка для HTTP 429 враховує заголовок retry-after; неповторювані помилки і досягнення бюджету під час виконання переводять задачу в dead без повторів. Рішення автора — [17-AI Insights.md](./17-AI%20Insights.md), Запис 19.
+- 24.11.2026 — уточнення без зміни рішення за результатами архітектурного аудиту підрозділу 2.1: узгодження PostgreSQL і Redis виконується щохвилини задачею черги maintenance, а не лише при старті worker; BudgetGuard резервує найгіршу вартість задач у черзі. Рішення автора — [17-AI Insights.md](./17-AI%20Insights.md), Запис 21.
 
 <!-- adr-001:end -->
 
@@ -172,7 +271,7 @@ flowchart TB
 
 Рисунок 2.1 – Діаграма контексту системи Recall (C4 Level 1)
 
-Таблиця 2.3 – Вузли діаграми контексту
+Таблиця 2.7 – Вузли діаграми контексту
 
 | Вузол | Тип | Технологія | Відповідальність | SRS-ID |
 |---|---|---|---|---|
@@ -184,7 +283,7 @@ flowchart TB
 | SMTP-провайдер | External System | SMTP (порт 587, STARTTLS) | Доставка листів підтвердження корпоративної пошти і відновлення доступу | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | LMS закладу (Moodle) | External System, поза MVP | LTI 1.3 | Інтеграцію не реалізовано; показано для фіксації межі системи | — |
 
-Таблиця 2.4 – Зв'язки діаграми контексту
+Таблиця 2.8 – Зв'язки діаграми контексту
 
 | Від | До | Протокол | Призначення |
 |---|---|---|---|
@@ -214,9 +313,9 @@ flowchart TB
             proxy["<b>Reverse Proxy</b><br/>[Container: Caddy]<br/>TLS 1.2+, публікує лише 443,<br/>проксування WebSocket"]
         end
         subgraph internal["Мережа internal (без опублікованих портів)"]
-            api["<b>Backend API</b><br/>[Container: Node.js 22, Express, Socket.io]<br/>Модульний моноліт: auth, courses, testing,<br/>scheduling, generation, monitoring"]
+            api["<b>Backend API</b><br/>[Container: Node.js 22, Express, Socket.io]<br/>Модульний моноліт (ADR-002): identity, courses,<br/>generation, testing, scheduling, monitoring,<br/>privacy, platform"]
             worker["<b>Generation Worker</b><br/>[Container: Node.js 22, BullMQ]<br/>Та сама кодова база, окрема точка входу;<br/>виклик LLM, валідація, чернетки;<br/>періодичні задачі maintenance"]
-            backup["<b>Backup Job</b><br/>[Container: pg_dump, cron]<br/>Щоденна копія на окремий носій"]
+            backup["<b>Backup Job</b><br/>[Container: pg_dump, tar, cron]<br/>Щоденна копія БД і PDF<br/>на окремий носій"]
             db[("<b>PostgreSQL 16</b><br/>[Container: Database]<br/>Користувачі, курси, відповіді,<br/>ReviewState, чернетки, журнали")]
             redis[("<b>Redis 7</b><br/>[Container: Redis, AOF]<br/>Черга BullMQ, події задач")]
             files[("<b>File Storage</b><br/>[Container: Docker volume]<br/>PDF лекцій і зразків")]
@@ -242,6 +341,7 @@ flowchart TB
     worker -- "HTTPS (Claude Messages API)" --> claude
     api -- "листи підтвердження і відновлення<br/>[SMTP, 587, STARTTLS]" --> smtp
     backup -- "pg_dump<br/>[SQL/TCP 5432]" --> db
+    backup -- "архів PDF<br/>[файлова система]" --> files
     api -. "LTI 1.3 (поза MVP)" .-> lms
 
     classDef person fill:#08427b,stroke:#052e56,color:#fff
@@ -256,15 +356,15 @@ flowchart TB
 
 Рисунок 2.2 – Діаграма контейнерів системи Recall (C4 Level 2)
 
-Таблиця 2.5 – Вузли діаграми контейнерів
+Таблиця 2.9 – Вузли діаграми контейнерів
 
 | Вузол | Тип | Технологія | Відповідальність | SRS-ID |
 |---|---|---|---|---|
-| Mobile App | Container | React Native, Expo | Рольовий інтерфейс студента і викладача; фіксація background-переходів, буферизація подій, блокування знімків і копіювання; панель моніторингу за подіями WebSocket; зберігання токенів у secure store | [SRS-FUN-18](./srs.md#srs-fun-18), [SRS-FUN-37](./srs.md#srs-fun-37), [SRS-FUN-38](./srs.md#srs-fun-38), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-40](./srs.md#srs-fun-40), [SRS-FUN-41](./srs.md#srs-fun-41), [SRS-FUN-42](./srs.md#srs-fun-42), [SRS-FUN-45](./srs.md#srs-fun-45), [SRS-NFR-SEC-04](./srs.md#srs-nfr-sec-04), [SRS-NFR-COMP-01](./srs.md#srs-nfr-comp-01), [SRS-NFR-COMP-02](./srs.md#srs-nfr-comp-02), [SRS-NFR-A11Y-01](./srs.md#srs-nfr-a11y-01), [SRS-NFR-A11Y-02](./srs.md#srs-nfr-a11y-02) |
+| Mobile App | Container | React Native, Expo | Рольовий інтерфейс студента і викладача; фіксація background-переходів, буферизація подій, блокування знімків і копіювання; панель моніторингу за подіями WebSocket; зберігання токенів у secure store; не більше одного одночасного оновлення токенів; повторне підключення Socket.io з новим токеном після події `auth.expired` і перезапит стану через REST | [SRS-FUN-18](./srs.md#srs-fun-18), [SRS-FUN-37](./srs.md#srs-fun-37), [SRS-FUN-38](./srs.md#srs-fun-38), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-40](./srs.md#srs-fun-40), [SRS-FUN-41](./srs.md#srs-fun-41), [SRS-FUN-42](./srs.md#srs-fun-42), [SRS-FUN-45](./srs.md#srs-fun-45), [SRS-NFR-SEC-04](./srs.md#srs-nfr-sec-04), [SRS-NFR-COMP-01](./srs.md#srs-nfr-comp-01), [SRS-NFR-COMP-02](./srs.md#srs-nfr-comp-02), [SRS-NFR-A11Y-01](./srs.md#srs-nfr-a11y-01), [SRS-NFR-A11Y-02](./srs.md#srs-nfr-a11y-02) |
 | Reverse Proxy | Container | Caddy | Термінація TLS 1.2+, проксування REST і WebSocket до Backend API, єдина точка входу на порту 443 | [SRS-NFR-SEC-06](./srs.md#srs-nfr-sec-06) |
-| Backend API | Container | Node.js 22, Express, Socket.io | REST API і канал подій; модулі auth, courses, testing, scheduling, generation, monitoring; RBAC, rate limiting, постановка задач у чергу, ретрансляція подій задач викладачу | [SRS-FUN-01](./srs.md#srs-fun-01)…[SRS-FUN-17](./srs.md#srs-fun-17), [SRS-FUN-19](./srs.md#srs-fun-19)…[SRS-FUN-22](./srs.md#srs-fun-22), [SRS-FUN-50](./srs.md#srs-fun-50)…[SRS-FUN-54](./srs.md#srs-fun-54), [SRS-FUN-28](./srs.md#srs-fun-28)…[SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-34](./srs.md#srs-fun-34)…[SRS-FUN-36](./srs.md#srs-fun-36), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-43](./srs.md#srs-fun-43), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-FUN-46](./srs.md#srs-fun-46)…[SRS-FUN-49](./srs.md#srs-fun-49), [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01), [SRS-NFR-PERF-02](./srs.md#srs-nfr-perf-02), [SRS-NFR-RT-01](./srs.md#srs-nfr-rt-01), [SRS-NFR-ASYNC-01](./srs.md#srs-nfr-async-01), [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01)…[SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03), [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05), [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07), [SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02), [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
+| Backend API | Container | Node.js 22, Express, Socket.io | REST API і канал подій; модулі identity, courses, generation, testing, scheduling, monitoring, privacy, platform (табл. 2.2); RBAC, rate limiting, постановка задач у чергу, ретрансляція подій задач викладачу | [SRS-FUN-01](./srs.md#srs-fun-01)…[SRS-FUN-17](./srs.md#srs-fun-17), [SRS-FUN-19](./srs.md#srs-fun-19)…[SRS-FUN-22](./srs.md#srs-fun-22), [SRS-FUN-50](./srs.md#srs-fun-50)…[SRS-FUN-54](./srs.md#srs-fun-54), [SRS-FUN-28](./srs.md#srs-fun-28)…[SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-34](./srs.md#srs-fun-34)…[SRS-FUN-36](./srs.md#srs-fun-36), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-43](./srs.md#srs-fun-43), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-FUN-46](./srs.md#srs-fun-46)…[SRS-FUN-49](./srs.md#srs-fun-49), [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01), [SRS-NFR-PERF-02](./srs.md#srs-nfr-perf-02), [SRS-NFR-RT-01](./srs.md#srs-nfr-rt-01), [SRS-NFR-ASYNC-01](./srs.md#srs-nfr-async-01), [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01)…[SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03), [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05), [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07), [SRS-NFR-SEC-08](./srs.md#srs-nfr-sec-08), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02), [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
 | Generation Worker | Container | Node.js 22, BullMQ | Отримання задач з черги, парсинг PDF, виклик Claude API з розмежуванням даних і інструкцій, валідація за JSON-схемою, перевірка подібності, збереження чернеток, облік вартості; періодичні задачі черги maintenance: завершення прострочених спроб (щохвилини), видалення подій антисписування за строком (щодоби) | [SRS-FUN-24](./srs.md#srs-fun-24)…[SRS-FUN-27](./srs.md#srs-fun-27), [SRS-FUN-30](./srs.md#srs-fun-30)…[SRS-FUN-33](./srs.md#srs-fun-33), [SRS-NFR-ASYNC-02](./srs.md#srs-nfr-async-02)…[SRS-NFR-ASYNC-04](./srs.md#srs-nfr-async-04), [SRS-NFR-COST-01](./srs.md#srs-nfr-cost-01), [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
-| Backup Job | Container | pg_dump, cron | Щоденний дамп PostgreSQL на окремий фізичний носій, зберігання 7 днів | [SRS-NFR-REL-03](./srs.md#srs-nfr-rel-03) |
+| Backup Job | Container | pg_dump, tar, cron | Щоденний дамп PostgreSQL і архів тому File Storage на окремий фізичний носій, зберігання 7 днів | [SRS-NFR-REL-03](./srs.md#srs-nfr-rel-03) |
 | PostgreSQL 16 | Container (Database) | PostgreSQL 16 | Користувачі, курси, контрольні заходи, відповіді, ReviewState, чернетки, журнал дій з контентом, задачі генерації з обліком токенів і вартості (generation_jobs); ACID-транзакції | [SRS-FUN-12](./srs.md#srs-fun-12), [SRS-FUN-16](./srs.md#srs-fun-16), [SRS-FUN-19](./srs.md#srs-fun-19), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
 | Redis 7 | Container (Database) | Redis 7, AOF | Брокер черги BullMQ, стан failed (dead-letter queue), події задач QueueEvents | [SRS-NFR-ASYNC-03](./srs.md#srs-nfr-async-03), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-REL-04](./srs.md#srs-nfr-rel-04) |
 | File Storage | Container (Storage) | Docker volume | Зберігання PDF лекцій і зразків тестів; доступ на запис — Backend API, на читання — Generation Worker; поза доступом клієнта | [SRS-FUN-09](./srs.md#srs-fun-09), [SRS-FUN-10](./srs.md#srs-fun-10), [SRS-FUN-11](./srs.md#srs-fun-11) |
@@ -275,7 +375,7 @@ flowchart TB
 
 Розгортання всіх серверних контейнерів у docker-compose з healthcheck і `restart: unless-stopped` реалізує [SRS-NFR-INFRA-01](./srs.md#srs-nfr-infra-01). Контур CI (GitHub Actions, npm audit, Trivy, SonarQube Cloud) не є елементом runtime і на діаграмі не показаний; він реалізує [SRS-NFR-SEC-09](./srs.md#srs-nfr-sec-09)…[SRS-NFR-SEC-11](./srs.md#srs-nfr-sec-11) і [SRS-NFR-MAINT-01](./srs.md#srs-nfr-maint-01). Поточний `docker-compose.yml` не містить Reverse Proxy, Generation Worker, Backup Job і сегментації мереж, а також публікує порти 5432 і 6379, не вмикає AOF і restart policy; конвеєр CI наразі виконує лише lint і модульні тести. Приведення конфігурації до діаграми виконується на етапі реалізації.
 
-Таблиця 2.6 – Зв'язки діаграми контейнерів
+Таблиця 2.10 – Зв'язки діаграми контейнерів
 
 | Від | До | Протокол | Призначення |
 |---|---|---|---|
@@ -293,6 +393,7 @@ flowchart TB
 | Generation Worker | Claude API | HTTPS (Claude Messages API, JSON) | Генерація контенту |
 | Backend API | SMTP-провайдер | SMTP, порт 587, STARTTLS | Листи підтвердження пошти і відновлення доступу |
 | Backup Job | PostgreSQL 16 | SQL/TCP 5432 (pg_dump) | Щоденне резервне копіювання |
+| Backup Job | File Storage | Файлова система (volume, лише читання) | Щоденний архів PDF |
 | Backend API | LMS закладу | LTI 1.3 (поза MVP) | Напрям розвитку |
 
 ## 2.3. Компонентне моделювання та опис серверного ядра
@@ -303,13 +404,13 @@ flowchart TB
 - **Ports** — інтерфейси сховищ і черги, визначені в Core (Dependency Inversion);
 - **Outbound** — реалізації портів для PostgreSQL, файлового сховища і BullMQ.
 
-Правило залежностей: Inbound → Core → Ports ← Outbound. Контролери і middleware (зокрема CourseRoleGuard) звертаються лише до сервісів Core; сервіси Core звертаються лише до портів і до інших сервісів Core. Компоненти створюються і зв'язуються вручну (Dependency Injection через конструктор) в одному місці — CompositionRoot; DI-фреймворк не використовується. SM2Scheduler і QualityScorer є чистими функціями без I/O, що спрощує unit-тестування ([SRS-NFR-MAINT-01](./srs.md#srs-nfr-maint-01)). Протокол аудиту — [17-AI Insights.md](./17-AI%20Insights.md), Запис 13.
+Правило залежностей: Inbound → Core → Ports ← Outbound. Контролери і middleware (зокрема CourseRoleGuard) звертаються лише до сервісів Core; сервіси Core звертаються лише до портів і до інших сервісів Core. Компоненти створюються і зв'язуються вручну (Dependency Injection через конструктор) у корені композиції кожного процесу: `api.js` (Backend API) і `worker.js` (Generation Worker); обидва збирають сервіси Core однією фабрикою `createCore(adapters)`; DI-фреймворк не використовується. Правило залежностей і межі модулів перевіряє dependency-cruiser у CI (підрозділ 2.1.1). SM2Scheduler, QualityScorer і PlanAllocator є чистими функціями без I/O, що спрощує unit-тестування ([SRS-NFR-MAINT-01](./srs.md#srs-nfr-maint-01)). Протокол аудиту — [17-AI Insights.md](./17-AI%20Insights.md), Запис 13.
 
 Через кількість компонентів діаграму рівня 3 подано двома рисунками з однією таблицею компонентів: рис. 2.3 — наскрізний конвеєр обробки запиту, рис. 2.4 — модулі шарів Inbound, Core, Ports, Outbound.
 
 ### 2.3.1. Конвеєр обробки запиту
 
-Запит REST проходить ланцюжок middleware у фіксованому порядку; кожен middleware або передає керування далі (`next()`), або завершує обробку помилкою, яку формує єдиний ErrorHandler у форматі RFC 9457 Problem Details. З'єднання Socket.io автентифікується на етапі handshake, а приєднання до кімнати курсу перевіряє той самий CourseRoleGuard (рис. 2.3).
+Запит REST проходить ланцюжок middleware у фіксованому порядку; кожен middleware або передає керування далі (`next()`), або завершує обробку помилкою, яку формує єдиний ErrorHandler у форматі RFC 9457 Problem Details. З'єднання Socket.io автентифікується на етапі handshake, а приєднання до кімнати курсу перевіряє той самий AccessPolicyService, до якого звертається CourseRoleGuard (рис. 2.3).
 
 ```mermaid
 flowchart TB
@@ -317,18 +418,18 @@ flowchart TB
     proxy["<b>Reverse Proxy</b><br/>[Container: Caddy]"]
 
     subgraph api["Backend API [Container: Node.js 22, Express 5, Socket.io]"]
-        root["<b>CompositionRoot</b><br/>[Component: app.js]<br/>Створення і зв'язування компонентів"]
+        root["<b>CompositionRoot</b><br/>[Component: api.js, createCore()]<br/>Створення і зв'язування компонентів"]
         subgraph http["HTTP-конвеєр обробки запиту (Express middleware)"]
             ctx["<b>RequestContext</b><br/>[Middleware: AsyncLocalStorage]<br/>requestId"]
             sec["<b>SecurityHeaders</b><br/>[Middleware: helmet]<br/>CORS вимкнено"]
             rl["<b>RateLimiter</b><br/>[Middleware: express-rate-limit]<br/>userId / login: акаунт, IP"]
             jwt["<b>JwtAuthMiddleware</b><br/>[Middleware: jsonwebtoken]<br/>підпис, alg, exp, iss"]
             guard["<b>CourseRoleGuard</b><br/>[Middleware]<br/>requireCourseRole(...)"]
-            upload["<b>UploadMiddleware</b><br/>[Middleware: multer]<br/>PDF ≤ 10 МБ, MIME, %PDF,<br/>≤ 60 сторінок, ≤ 40 000 токенів"]
+            upload["<b>UploadMiddleware</b><br/>[Middleware: multer]<br/>PDF ≤ 10 МБ, MIME, %PDF"]
             valid["<b>ValidationMiddleware</b><br/>[Middleware: zod]<br/>body, params, query → DTO"]
             ctrl["<b>Controllers</b><br/>[Component: Express Router]<br/>див. рис. 2.4"]
             err["<b>ErrorHandler</b><br/>[Middleware]<br/>RFC 9457 Problem Details"]
-            health["<b>HealthController</b><br/>[Component]<br/>GET /health"]
+            health["<b>HealthController</b><br/>[Component]<br/>GET /health: PostgreSQL;<br/>стан черги — поле queue"]
         end
         subgraph ws["WebSocket-канал (Socket.io)"]
             wsAuth["<b>SocketAuthMiddleware</b><br/>[io.use: JwtAuthMiddleware]<br/>handshake"]
@@ -349,7 +450,7 @@ flowchart TB
     jwt -- "next() / 401" --> guard
     guard -- "multipart: next()" --> upload
     guard -- "next() / 403" --> valid
-    upload -- "next() / 413, 415, 422" --> valid
+    upload -- "next() / 413, 415" --> valid
     valid -- "next() / 400" --> ctrl
     ctrl -- "interface call" --> core
     ctrl -- "next(err)" --> err
@@ -358,7 +459,7 @@ flowchart TB
     guard -. "next(err)" .-> err
     valid -. "next(err)" .-> err
     wsAuth -- "connect / reject" --> gw
-    gw -- "join: перевірка ролі" --> guard
+    gw -- "join: перевірка ролі<br/>(AccessPolicyService)" --> core
     guard -- "interface call" --> core
     health -- "interface call" --> core
     gw -- "interface call" --> core
@@ -381,7 +482,7 @@ flowchart TB
 
 ### 2.3.2. Модулі шарів
 
-Сервіси Core згруповано за модулями модульного моноліту: identity (AuthService, AccessPolicyService), courses (CourseService, InvitationService, ContentAuditLog), testing (TestDeliveryService, AttemptService, QualityScorer, MockTestService), scheduling (SM2Scheduler, DailyPlanPrioritizer), generation (GenerationJobService, BudgetGuard, ModerationService), monitoring (MasteryService, AntiCheatEventService, ProgressPublisher), platform (HealthService), privacy (PrivacyService). Події прогресу, антисписування і завершення задач генерації доставляються за патерном Observer: сервіс викликає `emit` у ProgressPublisher (EventEmitter), ProgressGateway підписаний на події і транслює події прогресу й антисписування в кімнату курсу `course:{courseId}`, а події задач генерації — у персональну кімнату ініціатора `user:{userId}` (рис. 2.4).
+Сервіси Core згруповано за модулями модульного моноліту: identity (AuthService), courses (CourseService, InvitationService, AccessPolicyService, ContentAuditLog), testing (TestDeliveryService, AttemptService, QualityScorer, MockTestService), scheduling (SM2Scheduler, PlanAllocator, DailyPlanPrioritizer); розподіл таблиць за модулями — табл. 2.2, generation (GenerationJobService, BudgetGuard, ModerationService), monitoring (MasteryService, AntiCheatEventService, ProgressPublisher), platform (HealthService), privacy (PrivacyService). Події прогресу, антисписування і завершення задач генерації доставляються за патерном Observer: сервіс викликає `emit` у ProgressPublisher (EventEmitter) лише після COMMIT транзакції, ProgressGateway підписаний на події і транслює події прогресу й антисписування в кімнату курсу `course:{courseId}`, а події задач генерації — у персональну кімнату ініціатора `user:{userId}` (рис. 2.4).
 
 ```mermaid
 flowchart LR
@@ -398,7 +499,7 @@ flowchart LR
         acC["<b>AntiCheatController</b>"]
         privC["<b>PrivacyController</b>"]
         gw["<b>ProgressGateway</b><br/>[Socket.io]"]
-        jobL["<b>JobEventsListener</b><br/>[BullMQ QueueEvents]"]
+        jobL["<b>JobEventsListener</b><br/>[BullMQ QueueEvents:<br/>generation, maintenance]"]
         guardC["<b>CourseRoleGuard</b><br/>[middleware]"]
         healthC["<b>HealthController</b><br/>GET /health"]
     end
@@ -414,7 +515,8 @@ flowchart LR
         attemptS["<b>AttemptService</b><br/>відповідь; завершення спроби"]
         scorer["<b>QualityScorer</b><br/>[pure] q за часткою правильних"]
         sm2["<b>SM2Scheduler</b><br/>[pure] EF, інтервал на спробу"]
-        prio["<b>DailyPlanPrioritizer</b><br/>P, ліміт 30"]
+        prio["<b>DailyPlanPrioritizer</b><br/>кандидати, питання approved"]
+        alloc["<b>PlanAllocator</b><br/>[pure] P, квоти 2…8, ліміт 30"]
         mockS["<b>MockTestService</b><br/>структура, пул, вибір питань"]
         genS["<b>GenerationJobService</b>"]
         budget["<b>BudgetGuard</b><br/>добовий ліміт"]
@@ -442,6 +544,7 @@ flowchart LR
         iGenJob["IGenerationJobRepository"]
         iTx["ITransactionManager"]
         iFile["IFileStorage"]
+        iPdf["IPdfTextExtractor"]
         iQueue["IJobQueue"]
     end
 
@@ -452,6 +555,7 @@ flowchart LR
         smtpS["<b>SmtpMailSender</b><br/>[nodemailer]"]
         consoleS["<b>ConsoleMailSender</b><br/>[dev/test: лист у журнал]"]
         mq["<b>BullMqJobQueue</b><br/>[BullMQ Queue]"]
+        pdfX["<b>PdfjsTextExtractor</b><br/>[pdfjs-dist, worker_threads]"]
     end
 
     db[("PostgreSQL 16")]
@@ -473,6 +577,7 @@ flowchart LR
     monC --> mastS
     acC --> acS
     gw --> acS
+    gw -- "join" --> accessS
     privC --> privS
     jobL -- "Observer" --> pub
     pub -. "Observer / EventEmitter" .-> gw
@@ -486,6 +591,8 @@ flowchart LR
     authS --> iMail
     courseS --> iCourse
     courseS --> iFile
+    courseS --> iPdf
+    courseS --> iTx
     courseS --> audit
     invS --> iCourse
     delivS --> iQRead
@@ -498,6 +605,8 @@ flowchart LR
     attemptS -- "emit" --> pub
     prio --> iReview
     prio --> iCourse
+    prio --> iQRead
+    prio --> alloc
     mockS --> delivS
     mockS --> iQRead
     genS --> budget
@@ -506,6 +615,7 @@ flowchart LR
     budget --> iGenJob
     modS --> iQWrite
     modS --> audit
+    modS --> iTx
     mastS --> iAttempt
     mastS --> iCourse
     acS --> iAc
@@ -513,10 +623,12 @@ flowchart LR
     audit --> iAudit
     privS --> iUser
     privS --> iAc
+    privS --> iTx
 
     pgRepo -. "implements" .-> ports
     fileS -. "implements IFileStorage" .-> iFile
     mq -. "implements IJobQueue" .-> iQueue
+    pdfX -. "implements IPdfTextExtractor" .-> iPdf
     pgRepo -- "SQL/TCP 5432" --> db
     mq -- "enqueue (BullMQ)<br/>[RESP/TCP 6379]" --> redis
     jobL -- "RESP/TCP 6379" --> redis
@@ -529,19 +641,19 @@ flowchart LR
     classDef pure fill:#2e7d32,stroke:#1b5e20,color:#fff
     classDef port fill:#ffffff,stroke:#2e6295,color:#000,stroke-dasharray:4 3
     classDef store fill:#999999,stroke:#6b6b6b,color:#fff
-    class authC,courseC,attemptC,planC,mockC,genC,modC,monC,acC,privC,gw,jobL,guardC,healthC,authS,accessS,healthS,courseS,invS,delivS,attemptS,prio,mockS,genS,budget,modS,mastS,acS,pub,audit,privS,pgRepo,fileS,mq,smtpS,consoleS comp
-    class scorer,sm2 pure
-    class iUser,iToken,iEmailTok,iMail,iCourse,iAttempt,iReview,iQRead,iQWrite,iAc,iAudit,iGenJob,iTx,iFile,iQueue port
+    class authC,courseC,attemptC,planC,mockC,genC,modC,monC,acC,privC,gw,jobL,guardC,healthC,authS,accessS,healthS,courseS,invS,delivS,attemptS,prio,mockS,genS,budget,modS,mastS,acS,pub,audit,privS,pgRepo,fileS,mq,smtpS,consoleS,pdfX comp
+    class scorer,sm2,alloc pure
+    class iUser,iToken,iEmailTok,iMail,iCourse,iAttempt,iReview,iQRead,iQWrite,iAc,iAudit,iGenJob,iTx,iFile,iPdf,iQueue port
     class db,redis,vol,mailsrv store
 ```
 
 Рисунок 2.4 – Діаграма компонентів Backend API: модулі шарів (C4 Level 3)
 
-Таблиця 2.7 – Компоненти Backend API
+Таблиця 2.11 – Компоненти Backend API
 
 | Компонент | Шар | Відповідальність | Залежності | SRS-ID |
 |---|---|---|---|---|
-| CompositionRoot | Composition Root | Створення екземплярів і зв'язування компонентів через конструктори | усі компоненти (DI) | — |
+| CompositionRoot | Composition Root | Створення екземплярів і зв'язування компонентів через конструктори: `api.js` для Backend API, `worker.js` для Generation Worker, спільна фабрика `createCore(adapters)`; відмова запуску при `NODE_ENV=production` і `MAIL_TRANSPORT` ≠ `smtp` | усі компоненти (DI) | — |
 | RequestContext | Inbound (middleware) | Генерація requestId, збереження в AsyncLocalStorage | Logger | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
 | Logger | Inbound (наскрізний) | Структуровані журнали JSON у stdout з requestId | pino | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
 | SecurityHeaders | Inbound (middleware) | HTTP-заголовки безпеки; CORS вимкнено | helmet | [SRS-NFR-SEC-06](./srs.md#srs-nfr-sec-06) |
@@ -549,10 +661,10 @@ flowchart LR
 | JwtAuthMiddleware | Inbound (middleware) | Перевірка access-токена: підпис, allowlist алгоритмів, exp, iss; 401 | jsonwebtoken | [SRS-FUN-02](./srs.md#srs-fun-02), [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01) |
 | SocketAuthMiddleware | Inbound (middleware) | Перевірка access-токена на handshake Socket.io (`io.use`) | JwtAuthMiddleware | [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05) |
 | CourseRoleGuard | Inbound (middleware) | Декларативна перевірка role_in_course для маршруту і приєднання до кімнати через AccessPolicyService; 403 | AccessPolicyService | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-06](./srs.md#srs-fun-06), [SRS-FUN-11](./srs.md#srs-fun-11), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05) |
-| UploadMiddleware | Inbound (middleware) | Приймання multipart: PDF ≤ 10 МБ, MIME application/pdf, сигнатура %PDF; вилучення текстового шару, ≤ 60 сторінок, ≤ 40 000 токенів; 413, 415, 422 | multer, pdfjs-dist | [SRS-FUN-09](./srs.md#srs-fun-09), [SRS-FUN-10](./srs.md#srs-fun-10), [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07) |
+| UploadMiddleware | Inbound (middleware) | Приймання multipart: PDF ≤ 10 МБ, MIME application/pdf, сигнатура %PDF; 413, 415. Обмеження текстового шару [SRS-FUN-51](./srs.md#srs-fun-51) перевіряє CourseService | multer | [SRS-FUN-09](./srs.md#srs-fun-09), [SRS-FUN-10](./srs.md#srs-fun-10), [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07) |
 | ValidationMiddleware | Inbound (middleware) | Валідація body, params, query за схемою zod, формування DTO; 400 | zod | [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07) |
 | ErrorHandler | Inbound (middleware) | Відображення доменних помилок у HTTP-коди, формат RFC 9457, без stack trace | Logger | [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
-| HealthController | Inbound | GET /health: 200 за доступності PostgreSQL і Redis | HealthService | [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
+| HealthController | Inbound | GET /health: 200 за доступності PostgreSQL, 503 — за недоступності; стан Redis — у полі `queue` (`up`, `down`) без впливу на код відповіді | HealthService | [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
 | AuthController | Inbound | Реєстрація, підтвердження пошти, вхід, оновлення токенів, вихід, відновлення доступу | AuthService | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-02](./srs.md#srs-fun-02), [SRS-FUN-53](./srs.md#srs-fun-53), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | CourseController | Inbound | Курси, теми, контрольні заходи, коди запрошення, матеріали, зразки | CourseService, InvitationService | [SRS-FUN-04](./srs.md#srs-fun-04)…[SRS-FUN-10](./srs.md#srs-fun-10) |
 | AttemptController | Inbound | Видача тесту, фіксація відповіді | TestDeliveryService, AttemptService | [SRS-FUN-13](./srs.md#srs-fun-13)…[SRS-FUN-17](./srs.md#srs-fun-17), [SRS-FUN-54](./srs.md#srs-fun-54) |
@@ -563,44 +675,46 @@ flowchart LR
 | MonitoringController | Inbound | Теплова карта, підтвердження засвоєння | MasteryService | [SRS-FUN-46](./srs.md#srs-fun-46), [SRS-FUN-47](./srs.md#srs-fun-47) |
 | AntiCheatController | Inbound | Приймання буферизованих подій антисписування через REST | AntiCheatEventService | [SRS-FUN-37](./srs.md#srs-fun-37), [SRS-FUN-38](./srs.md#srs-fun-38), [SRS-FUN-41](./srs.md#srs-fun-41) |
 | PrivacyController | Inbound | Видалення облікового запису | PrivacyService | [SRS-FUN-48](./srs.md#srs-fun-48) |
-| ProgressGateway | Inbound | Кімнати курсів `course:{courseId}` і персональні кімнати `user:{userId}` Socket.io; перевірка ролі і строку дії токена на кожній події кімнати; приймання подій клієнта; трансляція подій ProgressPublisher | AntiCheatEventService, ProgressPublisher (Observer), CourseRoleGuard | [SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-43](./srs.md#srs-fun-43), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-NFR-RT-01](./srs.md#srs-nfr-rt-01) |
-| JobEventsListener | Inbound | Підписка на BullMQ QueueEvents (completed, failed), передача в ProgressPublisher | ProgressPublisher, Redis | [SRS-FUN-30](./srs.md#srs-fun-30) |
-| AccessPolicyService | Core | Визначення role_in_course користувача в курсі для CourseRoleGuard | ICourseRepository | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-06](./srs.md#srs-fun-06), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05) |
-| HealthService | Core | Перевірка доступності PostgreSQL і Redis для GET /health | ITransactionManager, IJobQueue | [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
+| ProgressGateway | Inbound | Кімнати курсів `course:{courseId}` і персональні кімнати `user:{userId}` Socket.io; перевірка ролі через AccessPolicyService під час приєднання до кімнати; перевірка строку дії токена на кожній події без звернення до бази даних, після закінчення — подія `auth.expired` і розрив з'єднання; виключення з кімнати при вилученні учасника з курсу; ліміт 60 подій клієнта за хвилину на з'єднання; трансляція подій ProgressPublisher (надсилання плануються через `setImmediate`, винятки слухача перехоплюються) | AntiCheatEventService, ProgressPublisher (Observer), AccessPolicyService | [SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-43](./srs.md#srs-fun-43), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-NFR-RT-01](./srs.md#srs-nfr-rt-01) |
+| JobEventsListener | Inbound | Підписка на BullMQ QueueEvents (completed, failed) черг generation і maintenance; для задачі завершення прострочених спроб — публікація події завершення спроби за переліком `expiredAttemptIds` у кімнати курсів питань спроби; передача в ProgressPublisher | ProgressPublisher, Redis | [SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-15](./srs.md#srs-fun-15), [SRS-FUN-43](./srs.md#srs-fun-43) |
+| AccessPolicyService | Core (courses) | Визначення role_in_course користувача в курсі для CourseRoleGuard і ProgressGateway | ICourseRepository | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-06](./srs.md#srs-fun-06), [SRS-FUN-44](./srs.md#srs-fun-44), [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05) |
+| HealthService | Core (platform) | Перевірка доступності PostgreSQL (визначає код відповіді) і Redis (поле `queue`) для GET /health | ITransactionManager, IJobQueue | [SRS-NFR-OBS-02](./srs.md#srs-nfr-obs-02) |
 | AuthService | Core | Перевірка домену корпоративної пошти, одноразові токени підтвердження пошти і відновлення доступу (зберігається хеш SHA-256), видача і ротація токенів, reuse detection, вихід із відкликанням сімейства refresh-токенів, хешування паролів Argon2id | IUserRepository, IRefreshTokenRepository, IEmailTokenRepository, IMailSender | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-02](./srs.md#srs-fun-02), [SRS-NFR-SEC-01](./srs.md#srs-nfr-sec-01)…[SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03), [SRS-FUN-53](./srs.md#srs-fun-53), [SRS-FUN-55](./srs.md#srs-fun-55) |
-| CourseService | Core | Курси, теми, контрольні заходи, ролі, збереження PDF, обмеження co-instructor | ICourseRepository, IFileStorage, ContentAuditLog | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-06](./srs.md#srs-fun-06)…[SRS-FUN-10](./srs.md#srs-fun-10) |
+| CourseService | Core (courses) | Курси, теми, контрольні заходи, ролі, обмеження co-instructor; перевірка текстового шару PDF (≤ 60 сторінок, ≤ 40 000 токенів, доменні помилки `pdf-no-text-layer`, `pdf-too-long` → 422); збереження PDF до транзакції і видалення файлу при її відкаті; запис матеріалу і журналу аудиту в одній транзакції | ICourseRepository, IFileStorage, IPdfTextExtractor, ITransactionManager, ContentAuditLog | [SRS-FUN-03](./srs.md#srs-fun-03), [SRS-FUN-06](./srs.md#srs-fun-06)…[SRS-FUN-10](./srs.md#srs-fun-10), [SRS-FUN-51](./srs.md#srs-fun-51) |
 | InvitationService | Core | Створення, відкликання і застосування кодів запрошення | ICourseRepository | [SRS-FUN-04](./srs.md#srs-fun-04), [SRS-FUN-05](./srs.md#srs-fun-05) |
 | TestDeliveryService | Core | Рандомізація питань і варіантів, видача без ознаки правильної відповіді, серверний таймер, перевірка власника спроби | IQuestionReadRepository, IAttemptRepository | [SRS-FUN-13](./srs.md#srs-fun-13)…[SRS-FUN-15](./srs.md#srs-fun-15), [SRS-FUN-54](./srs.md#srs-fun-54) |
 | AttemptService | Core | Фіксація відповіді з ідемпотентністю за (attemptId, questionId) і публікацією події прогресу; при завершенні спроби — транзакція «результати спроби + ReviewState» (один перерахунок на тему) | ITransactionManager, IAttemptRepository, IReviewStateRepository, QualityScorer, SM2Scheduler, ProgressPublisher | [SRS-FUN-16](./srs.md#srs-fun-16), [SRS-FUN-19](./srs.md#srs-fun-19), [SRS-FUN-43](./srs.md#srs-fun-43), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01), [SRS-NFR-PERF-02](./srs.md#srs-nfr-perf-02) |
 | QualityScorer | Core (чиста функція) | Обчислення q для теми за часткою правильних відповідей (табл. А.1 [srs.md](./srs.md)) | — | [SRS-FUN-17](./srs.md#srs-fun-17) |
 | SM2Scheduler | Core (чиста функція) | Один перерахунок EF, інтервалу, кількості повторень, дати повторення на тему при завершенні спроби; EF не змінюється при q < 3 | — | [SRS-FUN-19](./srs.md#srs-fun-19) |
-| DailyPlanPrioritizer | Core | Відбір тем-кандидатів, пріоритет P за найближчим контрольним заходом, розподіл 30 питань (2…8 на тему), вибір питань approved | IReviewStateRepository, ICourseRepository, IQuestionReadRepository | [SRS-FUN-20](./srs.md#srs-fun-20), [SRS-FUN-21](./srs.md#srs-fun-21), [SRS-FUN-50](./srs.md#srs-fun-50), [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01) |
+| DailyPlanPrioritizer | Core (scheduling) | Завантаження тем-кандидатів, ReviewState і контрольних заходів, передавання їх у PlanAllocator, вибір питань approved за розподілом | IReviewStateRepository, ICourseRepository, IQuestionReadRepository, PlanAllocator | [SRS-FUN-20](./srs.md#srs-fun-20), [SRS-FUN-21](./srs.md#srs-fun-21), [SRS-FUN-50](./srs.md#srs-fun-50), [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01) |
+| PlanAllocator | Core (чиста функція) | Пріоритет P := d_overdue + 10 / max(1, d_event), відбір ≤ 15 тем, розподіл ≤ 30 питань (2…8 на тему), рівномірний розподіл при ΣP = 0 (підрозділ 2.8.2) | — | [SRS-FUN-20](./srs.md#srs-fun-20), [SRS-FUN-21](./srs.md#srs-fun-21), [SRS-NFR-MAINT-01](./srs.md#srs-nfr-maint-01) |
 | MockTestService | Core | Структура пробного тесту за зразком, перевірка пулу 2 × структура, вибір питань за давністю | TestDeliveryService, IQuestionReadRepository, IAttemptRepository | [SRS-FUN-34](./srs.md#srs-fun-34)…[SRS-FUN-36](./srs.md#srs-fun-36) |
 | GenerationJobService | Core | Запис GenerationJob зі статусом queued до постановки в чергу, постановка задачі з типом контенту і idempotency_key як jobId; стан задачі за ідентифікатором | BudgetGuard, IGenerationJobRepository, IJobQueue | [SRS-FUN-22](./srs.md#srs-fun-22), [SRS-FUN-52](./srs.md#srs-fun-52), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02) |
-| BudgetGuard | Core | Перевірка добового ліміту вартості за сумою cost_usd задач поточної доби UTC; 429 | IGenerationJobRepository | [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02) |
-| ModerationService | Core | Зміна статусу чернетки, доступ student лише до approved | IQuestionWriteRepository, ContentAuditLog | [SRS-FUN-28](./srs.md#srs-fun-28), [SRS-FUN-29](./srs.md#srs-fun-29) |
+| BudgetGuard | Core (generation) | Перевірка добового ліміту за сумою фактичної вартості cost_usd задач поточної доби UTC і резерву 0,024 USD на кожну задачу в станах queued і processing; доменна помилка `BudgetExceededError` (ErrorHandler → 429) | IGenerationJobRepository | [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02) |
+| ModerationService | Core (generation) | Зміна статусу чернетки і запис у журнал аудиту в одній транзакції; доступ student лише до approved | IQuestionWriteRepository, ContentAuditLog, ITransactionManager | [SRS-FUN-28](./srs.md#srs-fun-28), [SRS-FUN-29](./srs.md#srs-fun-29) |
 | MasteryService | Core | Частка правильних відповідей «студент × тема», confirmed_by | IAttemptRepository, ICourseRepository | [SRS-FUN-46](./srs.md#srs-fun-46), [SRS-FUN-47](./srs.md#srs-fun-47) |
 | AntiCheatEventService | Core | Збереження подій виходу і знімків екрана, агрегати для моніторингу | IAntiCheatEventRepository, ProgressPublisher | [SRS-FUN-37](./srs.md#srs-fun-37)…[SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-41](./srs.md#srs-fun-41) |
-| ProgressPublisher | Core | Шина доменних подій (EventEmitter) для прогресу, антисписування і задач генерації | — | [SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-43](./srs.md#srs-fun-43) |
+| ProgressPublisher | Core (monitoring) | Шина доменних подій (EventEmitter) у межах процесу для прогресу, антисписування, задач генерації і завершення спроб; `emit` — лише після COMMIT; доставка best-effort | — | [SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-43](./srs.md#srs-fun-43) |
 | ContentAuditLog | Core | Журнал дій з контентом | IAuditLogRepository | [SRS-FUN-12](./srs.md#srs-fun-12) |
-| PrivacyService | Core | Видалення облікового запису зі знеособленням, видалення подій антисписування за строком | IUserRepository, IAntiCheatEventRepository | [SRS-FUN-48](./srs.md#srs-fun-48), [SRS-FUN-49](./srs.md#srs-fun-49) |
-| IUserRepository, IRefreshTokenRepository, IEmailTokenRepository (таблиці email_verification_tokens і password_reset_tokens), IMailSender, ICourseRepository, IAttemptRepository, IReviewStateRepository, IQuestionReadRepository, IQuestionWriteRepository, IAntiCheatEventRepository, IAuditLogRepository, IGenerationJobRepository, ITransactionManager, IFileStorage, IJobQueue | Ports | Інтерфейси сховищ, транзакцій, файлів і черги; IQuestionReadRepository не повертає ознаку правильної відповіді (ISP) | — | [SRS-FUN-14](./srs.md#srs-fun-14), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
+| PrivacyService | Core (privacy) | Видалення облікового запису зі знеособленням і видаленням подій антисписування в одній транзакції; видалення подій антисписування за строком | IUserRepository, IAntiCheatEventRepository, ITransactionManager | [SRS-FUN-48](./srs.md#srs-fun-48), [SRS-FUN-49](./srs.md#srs-fun-49) |
+| IUserRepository, IRefreshTokenRepository, IEmailTokenRepository (таблиці email_verification_tokens і password_reset_tokens), IMailSender, ICourseRepository, IAttemptRepository, IReviewStateRepository, IQuestionReadRepository, IQuestionWriteRepository, IAntiCheatEventRepository, IAuditLogRepository, IGenerationJobRepository, ITransactionManager, IFileStorage, IPdfTextExtractor, IJobQueue | Ports | Інтерфейси сховищ, транзакцій, файлів, вилучення тексту і черги, описані JSDoc; поточна транзакція ITransactionManager зберігається в AsyncLocalStorage; IQuestionReadRepository не повертає ознаку правильної відповіді (ISP) | — | [SRS-FUN-14](./srs.md#srs-fun-14), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
 | Pg*Repository, PgTransactionManager | Outbound | Реалізації репозиторіїв і транзакцій на Kysely з драйвером pg; лише параметризовані запити; обмеження UNIQUE (attempt_id, question_id) | Kysely, pg, PostgreSQL 16 | [SRS-FUN-16](./srs.md#srs-fun-16), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
+| PdfjsTextExtractor | Outbound | Вилучення текстового шару і кількості сторінок PDF в окремому потоці `worker_threads`, щоб не блокувати event loop | pdfjs-dist | [SRS-FUN-51](./srs.md#srs-fun-51) |
 | LocalFileStorage | Outbound | Запис PDF у Docker volume | fs | [SRS-FUN-09](./srs.md#srs-fun-09), [SRS-FUN-10](./srs.md#srs-fun-10) |
-| SmtpMailSender | Outbound | Надсилання листів підтвердження пошти і відновлення доступу через SMTP після фіксації транзакції; посилання містить одноразовий токен | nodemailer, SMTP-провайдер | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
+| SmtpMailSender | Outbound | Надсилання листів підтвердження пошти і відновлення доступу через SMTP після фіксації транзакції і відповіді клієнту, тайм-аут з'єднання 10 с; збій журналюється без повтору, користувач повторює запит; посилання містить одноразовий токен | nodemailer, SMTP-провайдер | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | ConsoleMailSender | Outbound | Реалізація IMailSender для середовищ dev і test: лист з посиланням записується в журнал застосунку замість надсилання; адаптер обирається змінною оточення `MAIL_TRANSPORT` (`smtp` або `console`), у production допускається лише `smtp` | pino | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | BullMqJobQueue | Outbound | Постановка задач BullMQ з jobId := idempotency_key, attempts = 3, exponential backoff 5 с, requestId у даних задачі | bullmq, Redis 7 | [SRS-NFR-ASYNC-03](./srs.md#srs-nfr-async-03), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
 
-**Періодичні задачі.** Generation Worker виконує дві повторювані задачі окремої черги `maintenance` (BullMQ Job Scheduler; один запуск на інтервал незалежно від кількості процесів): щохвилини обробник MaintenanceJobHandler вибирає спроби `status = 'in_progress' AND deadline_at < now` (індекс `attempts_in_progress_deadline_idx`) і завершує кожну алгоритмом підрозділу 2.8.1 через AttemptService зі статусом `expired`; щодоби о 03:00 Europe/Kyiv PrivacyService видаляє події антисписування за [SRS-FUN-49](./srs.md#srs-fun-49). Сервіси Core спільні для Backend API і Generation Worker (одна кодова база, підрозділ 2.2.2), тому окремої реалізації логіки завершення спроби немає ([SRS-FUN-15](./srs.md#srs-fun-15), [SRS-FUN-19](./srs.md#srs-fun-19)).
+**Періодичні задачі.** Generation Worker виконує дві повторювані задачі окремої черги `maintenance` (BullMQ Job Scheduler; один запуск на інтервал незалежно від кількості процесів): щохвилини обробник MaintenanceJobHandler вибирає спроби `status = 'in_progress' AND deadline_at < now` (індекс `attempts_in_progress_deadline_idx`), завершує кожну алгоритмом підрозділу 2.8.1 через AttemptService зі статусом `expired` і повертає перелік `expiredAttemptIds` як результат задачі, за яким JobEventsListener у Backend API публікує події завершення спроб (ProgressPublisher процесу worker не має слухачів Socket.io); тим самим обробником щохвилини повторно ставляться в чергу задачі generation_jobs у стані queued, старші за 1 хв, з тим самим jobId (ADR-001); щодоби о 03:00 Europe/Kyiv PrivacyService видаляє події антисписування за [SRS-FUN-49](./srs.md#srs-fun-49). Сервіси Core спільні для Backend API і Generation Worker (одна кодова база, підрозділ 2.2.2), тому окремої реалізації логіки завершення спроби немає ([SRS-FUN-15](./srs.md#srs-fun-15), [SRS-FUN-19](./srs.md#srs-fun-19)).
 
-Таблиця 2.8 – Типи зв'язків діаграм компонентів
+Таблиця 2.12 – Типи зв'язків діаграм компонентів
 
 | Підпис зв'язку | Значення |
 |---|---|
 | DI | Впровадження залежності через конструктор у CompositionRoot |
 | interface call / суцільна стрілка без підпису | Синхронний виклик методу сервісу або інтерфейсу порту |
 | implements | Реалізація інтерфейсу порту адаптером Outbound |
-| Observer / EventEmitter, emit | Асинхронна доставка доменної події підписникам у межах процесу |
+| Observer / EventEmitter, emit | Синхронний виклик слухачів доменної події в межах процесу після COMMIT; слухач ProgressGateway планує надсилання через `setImmediate` і перехоплює винятки, тому збій доставки не впливає на операцію |
 | enqueue (BullMQ) | Постановка задачі в чергу Redis |
 | next() / next(err) | Передача керування наступному middleware або ErrorHandler |
 | SQL/TCP 5432, RESP/TCP 6379 | Мережеві виклики до PostgreSQL і Redis |
@@ -609,7 +723,7 @@ flowchart LR
 
 ## 2.5. Специфікація міжсервісних контрактів та топологія API-маршрутів
 
-Контракт REST API контейнера Backend API (підрозділ 2.2.2) специфіковано у форматі OpenAPI 3.0.3 у файлі [api/openapi.yaml](./api/openapi.yaml): 47 операцій на 40 шляхах, згрупованих у 9 тегів (табл. 2.9). Специфікацію перевірено інструментом `redocly lint` (набір правил recommended) без помилок і попереджень; протокол аудиту контракту — [17-AI Insights.md](./17-AI%20Insights.md), Запис 18. Події реального часу (Socket.io) до контракту REST не входять і описані в підрозділі 2.3.
+Контракт REST API контейнера Backend API (підрозділ 2.2.2) специфіковано у форматі OpenAPI 3.0.3 у файлі [api/openapi.yaml](./api/openapi.yaml): 47 операцій на 40 шляхах, згрупованих у 9 тегів (табл. 2.13). Специфікацію перевірено інструментом `redocly lint` (набір правил recommended) без помилок і попереджень; протокол аудиту контракту — [17-AI Insights.md](./17-AI%20Insights.md), Запис 18. Події реального часу (Socket.io) до контракту REST не входять і описані в підрозділі 2.3.
 
 ### 2.5.1. Загальні правила контракту
 
@@ -619,12 +733,12 @@ flowchart LR
 - Автентифікація — схема `bearerAuth` (HTTP Bearer, JWT), задана глобально; `security: []` мають лише сім публічних операцій групи Auth.
 - Авторизація — роль у курсі перевіряє CourseRoleGuard на кожному запиті ([SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05)); ролі кожної операції наведено в розширенні `x-roles`, трасування до SRS — у розширенні `x-srs`. Запит до ресурсу іншого курсу повертає 403, до спроби іншого студента того самого курсу — 404 ([SRS-FUN-54](./srs.md#srs-fun-54)).
 - Схеми тіл запитів мають `required`, `additionalProperties: false` і межі значень: `minLength`/`maxLength`, `minimum`/`maximum`, `pattern`, `minItems`/`maxItems`/`uniqueItems`. Пошта — `format: email`, до 254 символів; пароль — від 10 до 128 символів; файл PDF — до 10 485 760 байт.
-- Значення enum збігаються з ENUM-типами схеми даних (табл. 2.11): `course_role`, `control_event_type`, `question_type`, `question_status`, `question_source`, `attempt_mode`, `attempt_status`, `attempt_event_type`, `generation_job_type`, `generation_job_status`.
+- Значення enum збігаються з ENUM-типами схеми даних (табл. 2.15): `course_role`, `control_event_type`, `question_type`, `question_status`, `question_source`, `attempt_mode`, `attempt_status`, `attempt_event_type`, `generation_job_type`, `generation_job_status`.
 - Колекції повертаються сторінками: параметри `page` (≥ 1) і `limit` (1…100, за замовчуванням 20), конверт відповіді `{items, page, limit, total}`.
 - Створення ресурсу повертає 201 із заголовком `Location`; постановка задачі генерації — 202 із заголовком `Location` на ресурс стану задачі.
-- Помилки повертаються в одному форматі `application/problem+json` за RFC 9457 з полями `type`, `title`, `status`, `detail`, `instance`, `requestId` і масивом `errors` з JSON Pointer на поле запиту (табл. 2.10). Кожна операція документує 401 (крім публічних), 429, 500 і 503, а також коди 400, 403, 404, 409, 413, 415 і 422 відповідно до своєї логіки; для 429 і 503 передається заголовок `Retry-After`.
+- Помилки повертаються в одному форматі `application/problem+json` за RFC 9457 з полями `type`, `title`, `status`, `detail`, `instance`, `requestId` і масивом `errors` з JSON Pointer на поле запиту (табл. 2.14). Кожна операція документує 401 (крім публічних), 429, 500 і 503, а також коди 400, 403, 404, 409, 413, 415 і 422 відповідно до своєї логіки; для 429 і 503 передається заголовок `Retry-After`.
 
-Таблиця 2.9 – Групи операцій REST API
+Таблиця 2.13 – Групи операцій REST API
 
 | Група (тег) | Шляхи | Ролі | Вимоги |
 |---|---|---|---|
@@ -638,9 +752,9 @@ flowchart LR
 | Mock tests | `…/mock-tests`, `…/control-events/{controlEventId}/mock-test` | Публікація — owner, co_instructor; перелік — усі ролі | [SRS-FUN-34](./srs.md#srs-fun-34), [SRS-FUN-35](./srs.md#srs-fun-35) |
 | Monitoring | `…/heatmap`, `…/members/{userId}/mastery-confirmations/{topicId}` | owner, co_instructor | [SRS-FUN-46](./srs.md#srs-fun-46), [SRS-FUN-47](./srs.md#srs-fun-47) |
 
-Скорочення «…» у табл. 2.9 позначає префікс `/courses/{courseId}`; повний перелік операцій з методами, тілами і відповідями наведено в [api/openapi.yaml](./api/openapi.yaml).
+Скорочення «…» у табл. 2.13 позначає префікс `/courses/{courseId}`; повний перелік операцій з методами, тілами і відповідями наведено в [api/openapi.yaml](./api/openapi.yaml).
 
-Таблиця 2.10 – Каталог типів помилок (RFC 9457)
+Таблиця 2.14 – Каталог типів помилок (RFC 9457)
 
 | Код | Значення `type` | Умова |
 |---|---|---|
@@ -707,12 +821,12 @@ flowchart LR
 Правила, спільні для всіх таблиць:
 - первинні ключі — `uuid DEFAULT gen_random_uuid()`, крім таблиць зв'язку зі складеними ключами;
 - часові мітки — `timestamptz` (UTC), календарні дати контрольних заходів і повторень — `date`;
-- статуси, ролі й типи — ENUM-типи PostgreSQL (табл. 2.11), значення яких збігаються з enum у контракті API (підрозділ 2.5);
+- статуси, ролі й типи — ENUM-типи PostgreSQL (табл. 2.15), значення яких збігаються з enum у контракті API (підрозділ 2.5);
 - зовнішні ключі — `ON DELETE RESTRICT`, крім дочірніх записів складу (позначено CASCADE); облікові записи не видаляються фізично: видалення за [SRS-FUN-48](./srs.md#srs-fun-48) встановлює `deleted_at` і знеособлює `email` і `display_name`, а відповіді зберігаються для агрегатів курсу;
 - складені зовнішні ключі з `course_id` унеможливлюють зв'язок об'єктів різних курсів (тема контрольного заходу, тема матеріалу, тема питання);
 - суми в USD — `numeric(10,4)`, коефіцієнт легкості — `numeric(3,2)`; типи з плаваючою комою не використовуються.
 
-Таблиця 2.11 – ENUM-типи схеми даних
+Таблиця 2.15 – ENUM-типи схеми даних
 
 | Тип | Значення | Використання |
 |---|---|---|
@@ -1008,9 +1122,9 @@ erDiagram
 
 ### 2.7.1. Специфікація таблиць
 
-Специфікацію таблиць наведено в табл. 2.12. Для кожної таблиці вказано поля, що не повторюють загальних правил: `id`, `created_at`, `updated_at` мають тип і обмеження, наведені вище.
+Специфікацію таблиць наведено в табл. 2.16. Для кожної таблиці вказано поля, що не повторюють загальних правил: `id`, `created_at`, `updated_at` мають тип і обмеження, наведені вище.
 
-Таблиця 2.12 – Специфікація таблиць схеми даних
+Таблиця 2.16 – Специфікація таблиць схеми даних
 
 | Таблиця | Поле | Тип | Обмеження | Опис |
 |---|---|---|---|---|
@@ -1091,9 +1205,9 @@ erDiagram
 
 ### 2.7.2. План індексів
 
-Індекси первинних ключів і обмежень UNIQUE створюються автоматично; у табл. 2.13 наведено індекси, що прискорюють запити критичних сценаріїв. Тип — B-Tree, якщо не вказано інше.
+Індекси первинних ключів і обмежень UNIQUE створюються автоматично; у табл. 2.17 наведено індекси, що прискорюють запити критичних сценаріїв. Тип — B-Tree, якщо не вказано інше.
 
-Таблиця 2.13 – План індексів
+Таблиця 2.17 – План індексів
 
 | Індекс | Таблиця (поля) | Тип | Запит, який прискорює | SRS-ID |
 |---|---|---|---|---|
@@ -1118,7 +1232,7 @@ erDiagram
 | attempt_events_attempt_time_idx | attempt_events (attempt_id, occurred_at) | — | Лічильник виходів і час поза тестом | [SRS-FUN-39](./srs.md#srs-fun-39) |
 | attempt_events_client_key | attempt_events (attempt_id, client_event_id) | UNIQUE | Дедуплікація подій з буфера клієнта | [SRS-FUN-38](./srs.md#srs-fun-38) |
 | generation_jobs_idempotency_key | generation_jobs (idempotency_key) | UNIQUE | Ідемпотентна постановка задачі | [SRS-FUN-22](./srs.md#srs-fun-22), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02) |
-| generation_jobs_created_idx | generation_jobs (created_at) INCLUDE (cost_usd) | Покривний | Сума вартості за поточну добу UTC (BudgetGuard) | [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02) |
+| generation_jobs_created_idx | generation_jobs (created_at) INCLUDE (cost_usd) | Покривний | Сума вартості за поточну добу UTC і резерв задач у станах queued, processing (BudgetGuard) | [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02) |
 | audit_log_at_brin | audit_log (at) | BRIN | Вибірка журналу за періодом у таблиці лише з INSERT | [SRS-FUN-12](./srs.md#srs-fun-12) |
 | audit_log_entity_idx | audit_log (entity, entity_id, at DESC) | — | Історія дій з об'єктом | [SRS-FUN-12](./srs.md#srs-fun-12) |
 
@@ -1128,9 +1242,9 @@ erDiagram
 
 Формалізовано три алгоритми, від яких залежать коректність навчальної моделі і вартість експлуатації: оновлення стану SM-2 після завершення спроби (компонент SM2Calculator, підрозділ 2.3), формування персонального плану на день (DailyPlanPrioritizer) і обробка задачі генерації worker-процесом (Generation Worker, ADR-001). Протокол нормоконтролю алгоритмів — [17-AI Insights.md](./17-AI%20Insights.md), Запис 19.
 
-Правила запису: `:=` — присвоювання; `=`, `≠`, `<`, `≤`, `>`, `≥` — порівняння; складені умови поєднуються операторами AND, OR, NOT; елементи колекцій позначаються індексами `T[i]`, `Cand[j]`, `Items[i]`; `|X|` — потужність множини або довжина рядка; `⌈x⌉` — округлення вгору; NULL — відсутнє значення. Поточна дата `today := Date(now, Europe/Kyiv)`. Блок-схеми виконано кодом Mermaid.js (`flowchart TD`) з позначеннями блоків за ДСТУ 19.701 (табл. 2.14).
+Правила запису: `:=` — присвоювання; `=`, `≠`, `<`, `≤`, `>`, `≥` — порівняння; складені умови поєднуються операторами AND, OR, NOT; елементи колекцій позначаються індексами `T[i]`, `Cand[j]`, `Items[i]`; `|X|` — потужність множини або довжина рядка; `⌈x⌉` — округлення вгору; NULL — відсутнє значення. Поточна дата `today := Date(now, Europe/Kyiv)`. Блок-схеми виконано кодом Mermaid.js (`flowchart TD`) з позначеннями блоків за ДСТУ 19.701 (табл. 2.18).
 
-Таблиця 2.14 – Відповідність блоків блок-схем ДСТУ 19.701 і синтаксису Mermaid.js
+Таблиця 2.18 – Відповідність блоків блок-схем ДСТУ 19.701 і синтаксису Mermaid.js
 
 | Блок ДСТУ 19.701 | Призначення | Синтаксис Mermaid.js |
 |---|---|---|
@@ -1254,7 +1368,7 @@ flowchart TD
 
 1. `BEGIN`; `G := SELECT … FROM generation_jobs WHERE id = Job.generationJobId FOR UPDATE`. Якщо `G = NULL OR G.status ∈ {'done', 'dead'}` — `COMMIT`, задачу підтверджено без обробки (повторна доставка); кінець.
 2. `G.status := 'processing'`; `G.attempts_made := Job.attemptsMade + 1`; `G.started_at := Coalesce(G.started_at, now)`; `COMMIT`.
-3. `Spent := Σ cost_usd FROM generation_jobs WHERE created_at ≥ 00:00 UTC поточної доби`; `Est := (TokensIn × 0,10 + MaxTokens × 0,50) / 10^6`. Якщо `Spent + Est > DailyBudget` — `Reason := 'budget-exceeded'`, перехід до кроку 12.
+3. `Spent := Σ cost_usd FROM generation_jobs WHERE created_at ≥ 00:00 UTC поточної доби`; `Est := (TokensIn × 0,10 + MaxTokens × 0,50) / 10^6`. Якщо `Spent + Est > DailyBudget` — `Reason := 'budget-exceeded'`, перехід до кроку 12. Резерв задач у черзі враховує BudgetGuard під час постановки ([SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02)); крок 3 перевіряє фактичні витрати перед кожним викликом.
 4. `Src := lecture_materials` при `G.type = 'lecture_test'`, `Src := source_tests` при `G.type = 'mock_questions'`; `Text := ExtractText(File(Src.storage_key))` (pdfjs-dist, читання з File Storage); `Text := NULL`, якщо файл відсутній. Якщо `Text = NULL OR |Text| = 0` — `Reason := 'source-empty'`, перехід до кроку 12.
 5. `Prompt := (системні інструкції; Text у розмежованому блоці документа з інструкцією не виконувати команди з нього; JSON-схема типу G.type)`.
 6. `(Resp, Err) := Claude.messages.create(model := 'claude-haiku-5-5', max_tokens := MaxTokens, timeout := Timeout, maxRetries := 0)`.
@@ -1314,9 +1428,9 @@ flowchart TD
 
 ## 2.9. Інтеграційний аудит та висновок про готовність архітектури
 
-Схему даних (підрозділ 2.7), контракт API (підрозділ 2.5) і алгоритми (підрозділ 2.8) звірено двома способами: скриптом, що порівнює ENUM-типи, типи і межі полів, атрибути алгоритмів і трасування SRS-FUN між `2_design.md`, `api/openapi.yaml` і `srs.md`, та наскрізним аудитом за промптом «Data & Logic Gatekeeper» методички. Протокол аудиту і рішення автора щодо зауважень I-01…I-11 — [17-AI Insights.md](./17-AI%20Insights.md), Запис 20. Результати наведено в табл. 2.15.
+Схему даних (підрозділ 2.7), контракт API (підрозділ 2.5) і алгоритми (підрозділ 2.8) звірено двома способами: скриптом, що порівнює ENUM-типи, типи і межі полів, атрибути алгоритмів і трасування SRS-FUN між `2_design.md`, `api/openapi.yaml` і `srs.md`, та наскрізним аудитом за промптом «Data & Logic Gatekeeper» методички. Протокол аудиту і рішення автора щодо зауважень I-01…I-11 — [17-AI Insights.md](./17-AI%20Insights.md), Запис 20. Результати наведено в табл. 2.19.
 
-Таблиця 2.15 – Звіт про готовність специфікацій до реалізації (Production Readiness Report)
+Таблиця 2.19 – Звіт про готовність специфікацій до реалізації (Production Readiness Report)
 
 | Перевірка | Результат | Виправлення |
 |---|---|---|
