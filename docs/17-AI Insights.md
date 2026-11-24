@@ -21,6 +21,7 @@
 > | 14 | ЛР5 | ADR-001: аудит компромісів |
 > | 15 | ЛР5 | Незалежний аудит і рішення автора |
 > | 16 | ЛР6 | Рішення автора перед ЛР6 і закриття залишків аудиту |
+> | 17 | ЛР6 | ERD: аудит шару даних (Data Layer Reviewer) |
 
 
 ## Запис 1 — Валідація першої теми Retain (15.09.2026)
@@ -1563,6 +1564,296 @@
 ### Фінальна версія
 
 Зміни внесено комітами «docs: record author decisions and close remaining audit findings» і «docs: switch authentication to corporate email with recovery» у гілці `feature/chapter2-architecture`.
+
+## Запис 17 — ERD: аудит шару даних (24.11.2026)
+
+**Інструмент:** Claude (Anthropic), сесія Claude Code в репозиторії проєкту. **Дата:** 24.11.2026. **Етап:** ЛР6, Завдання 1.
+
+> **Розподіл ролей.** Автор визначив вимоги, обмеження проєкту та архітектурні рішення,
+> ухвалив рішення щодо кожного зауваження аудитора і затвердив фінальну версію.
+> Claude (Anthropic) за інструкціями автора сформував чернетку артефакту, виконав аудит
+> за промптом методички та вніс затверджені автором правки.
+
+### Внесок автора
+
+- Визначив СУБД (PostgreSQL 16), нормальну форму (3NF), правила ключів (UUID, `gen_random_uuid()`), типи часу (`timestamptz`), використання ENUM-типів і мінімальний перелік сутностей з полями, зокрема `review_states.ef NUMERIC(3,2) CHECK ≥ 1.30`, `generation_jobs.idempotency_key UNIQUE`, `cost_usd NUMERIC(10,4)` і приклади індексів.
+- На кроці [СТОП] прийняв зауваження аудитора, крім трьох: T-06 (UUIDv7) відхилено — PostgreSQL 16 не має вбудованої `uuidv7()`, а за обсягу 50 000 відповідей фрагментація B-Tree не впливає на SLA; T-07 (GIN для `audit_log.meta`) відхилено — немає сценарію пошуку за ключами `meta`; тригер з G-08 відхилено — інваріант правильних варіантів перевіряється DTO (zod) під час збереження і модерації.
+
+### Вхідні дані
+
+- [srs.md](srs.md) (SRS-FUN-01…SRS-FUN-55, SRS-NFR), C4 рівня 2 ([2_design.md](2_design.md), підрозділ 2.2.2), рішення автора із Запису 16.
+
+> [!quote]- Використаний промпт (розгорнути)
+> Роль: Principal Database Architect, Lead Data Engineer та суворий технічний аудитор шарів збереження даних в Enterprise-системах.
+> Контекст: Я студент 4 курсу спеціальності 121/F2 «Інженерія ПЗ». Я спроєктував логіко-фізичну схему бази даних моєї системи у вигляді коду Mermaid.js. Мені потрібен твій жорсткий інженерний аудит, пошук помилок проєктування та критика оптимізації.
+> Обрана мною СУБД та її тип: PostgreSQL 16 (реляційна; доступ через query builder Kysely з драйвером pg)
+> Мій самостійно написаний код схеми в Mermaid.js: (наведено нижче в блоці «Перша версія артефакту»)
+> Твоє завдання: Проведи глибокий аналітичний аудит моєї схеми даних та видай технічний звіт українською мовою у форматі суворого Data Review за наступними пунктами:
+> 1. Аналіз нормалізації та консистентності (SQL) або денормалізації (NoSQL):
+> • Для SQL: Перевір схему на відповідність Третій нормальній формі (3NF). Вияв приховану надлишковість даних або аномалії оновлення/видалення.
+> • Для NoSQL: Перевір, чи правильно обрано стратегію між вкладенням документів (Embedding) та посиланнями (Referencing) з огляду на ліміти розміру документів (наприклад, 16MB у BSON MongoDB) та швидкість зчитування.
+> 2. Аудит цілісності та зв'язків (Referential Integrity): Перевір коректність розставлених зв'язків (1:1, 1:M, M:N). Чи правильно вказані зовнішні ключі (FK)? Чи немає «розірваних» сутностей або циклічних залежностей у схемах?
+> 3. Перевірка типів даних та продуктивності (Performance & Indexing): Проаналізуй обрані типи полів. Зверни увагу на неефективне використання ресурсів (наприклад, використання VARCHAR(MAX) або TEXT там, де потрібні фіксовані UUID, або неправильний формат збереження дат чи фінансових транзакцій). Підкажи, за якими полями критично необхідно побудувати індекси (B-Tree, Hash, GIN, Векторні індекси HNSW/IVF) станом на 2026 рік.
+> 4. Аналіз прогалин (Gap Analysis): Які важливі технічні поля (наприклад, created_at, updated_at, deleted_at для Soft Delete, версіонування для оптимістичного блокування або аудит-логи зміни статусів) я взагалі забув спроєктувати?
+> Наприкінці видай детальний опис кожної сутності (таблиці/колекції) та її полів для Розділу 2 випускної роботи.
+> Стиль: Сухий контрактний стиль. Повна відсутність розмовної мови, оціночних суджень та «води».
+
+> [!example]- Перша версія артефакту — ERD v1 без індексів і частини обмежень (розгорнути)
+> ```mermaid
+> erDiagram
+>     users ||--o{ refresh_tokens : "має"
+>     users ||--o{ course_members : "бере участь"
+>     courses ||--o{ course_members : "містить"
+>     courses ||--o{ invite_codes : "має"
+>     courses ||--o{ topics : "містить"
+>     courses ||--o{ control_events : "має"
+>     control_events ||--o{ control_event_topics : "охоплює"
+>     topics ||--o{ control_event_topics : "входить"
+>     topics ||--o{ lecture_materials : "має"
+>     control_events ||--o{ source_tests : "має"
+>     topics ||--o{ questions : "містить"
+>     questions ||--o{ question_options : "має"
+>     generation_jobs ||--o{ questions : "створює"
+>     users ||--o{ attempts : "проходить"
+>     attempts ||--o{ attempt_questions : "містить"
+>     questions ||--o{ attempt_questions : "видається"
+>     attempts ||--o{ answers : "має"
+>     answers ||--o{ answer_options : "обирає"
+>     users ||--o{ review_states : "має"
+>     topics ||--o{ review_states : "має"
+>     attempts ||--o{ attempt_events : "фіксує"
+>     users ||--o{ mastery_confirmations : "отримує"
+>     users ||--o{ audit_log : "виконує"
+>
+>     users {
+>         uuid id PK
+>         varchar email UK
+>         varchar display_name
+>         varchar password_hash
+>         timestamptz deleted_at
+>     }
+>     refresh_tokens {
+>         uuid id PK
+>         uuid user_id FK
+>         uuid family_id
+>         varchar token_hash
+>         timestamptz expires_at
+>         timestamptz revoked_at
+>         uuid replaced_by
+>     }
+>     courses {
+>         uuid id PK
+>         varchar title
+>         uuid created_by FK
+>     }
+>     course_members {
+>         uuid course_id PK
+>         uuid user_id PK
+>         varchar role
+>     }
+>     invite_codes {
+>         uuid id PK
+>         uuid course_id FK
+>         varchar code
+>         varchar role
+>         timestamptz expires_at
+>         boolean revoked
+>     }
+>     topics {
+>         uuid id PK
+>         uuid course_id FK
+>         varchar title
+>         int position
+>     }
+>     control_events {
+>         uuid id PK
+>         uuid course_id FK
+>         varchar type
+>         date date
+>     }
+>     control_event_topics {
+>         uuid control_event_id PK
+>         uuid topic_id PK
+>     }
+>     lecture_materials {
+>         uuid id PK
+>         uuid topic_id FK
+>         text storage_key
+>         int size_bytes
+>         int page_count
+>         boolean has_text_layer
+>     }
+>     source_tests {
+>         uuid id PK
+>         uuid control_event_id FK
+>         text storage_key
+>         int size_bytes
+>         int page_count
+>         boolean has_text_layer
+>     }
+>     questions {
+>         uuid id PK
+>         uuid topic_id FK
+>         varchar type
+>         varchar status
+>         varchar source
+>         text stem
+>         uuid generation_job_id FK
+>         text reject_reason
+>         uuid approved_by FK
+>     }
+>     question_options {
+>         uuid id PK
+>         uuid question_id FK
+>         text text
+>         boolean is_correct
+>         int position
+>     }
+>     attempts {
+>         uuid id PK
+>         uuid user_id FK
+>         varchar mode
+>         uuid control_event_id FK
+>         timestamptz started_at
+>         timestamptz deadline_at
+>         timestamptz finished_at
+>         varchar status
+>     }
+>     attempt_questions {
+>         uuid attempt_id PK
+>         uuid question_id PK
+>         int position
+>     }
+>     answers {
+>         uuid id PK
+>         uuid attempt_id FK
+>         uuid question_id FK
+>         boolean is_correct
+>         timestamptz answered_at
+>     }
+>     answer_options {
+>         uuid answer_id PK
+>         uuid option_id PK
+>     }
+>     review_states {
+>         uuid user_id PK
+>         uuid topic_id PK
+>         float ef
+>         int interval_days
+>         int repetitions
+>         date next_review
+>         int last_quality
+>     }
+>     attempt_events {
+>         uuid id PK
+>         uuid attempt_id FK
+>         varchar type
+>         timestamptz occurred_at
+>         int duration_ms
+>     }
+>     mastery_confirmations {
+>         uuid id PK
+>         uuid user_id FK
+>         uuid topic_id FK
+>         uuid confirmed_by FK
+>         timestamptz confirmed_at
+>     }
+>     generation_jobs {
+>         uuid id PK
+>         varchar type
+>         uuid source_id
+>         varchar idempotency_key
+>         varchar status
+>         int attempts_made
+>         text error
+>         int tokens_in
+>         int tokens_out
+>         float cost_usd
+>     }
+>     audit_log {
+>         uuid id PK
+>         uuid actor_id FK
+>         varchar action
+>         varchar entity
+>         uuid entity_id
+>         timestamptz at
+>         jsonb meta
+>     }
+> ```
+
+> [!abstract]- Повний звіт аудитора (розгорнути)
+> **Data Review: схема даних Recall (PostgreSQL 16), версія 1**
+>
+> **1. Нормалізація та консистентність (3NF)**
+>
+> - D-01. `generation_jobs.source_id` посилається то на `lecture_materials`, то на `source_tests` залежно від `type`. Зовнішній ключ для такого атрибута визначити неможливо; значення `type` і `source_id` не узгоджені обмеженням. Аномалія вставки: задача з ідентифікатором неіснуючого джерела.
+> - D-02. `lecture_materials.has_text_layer`, `source_tests.has_text_layer`: SRS-FUN-51 відхиляє PDF без текстового шару до збереження, тому в збережених рядках атрибут завжди дорівнює true. Атрибут надлишковий. Для перевірки ліміту 40 000 токенів і для ключа ідемпотентності (SRS-NFR-REL-02: версія джерела) потрібні інші атрибути: оцінка кількості токенів і хеш вмісту файлу.
+> - D-03. `control_event_topics` допускає зв'язок контрольного заходу з темою іншого курсу. Аномалія оновлення: перенесення теми між курсами не контролюється. Потрібен складений FK з `course_id`.
+> - D-04. `answer_options.option_id` може належати іншому питанню, ніж `answers.question_id`; `answers (attempt_id, question_id)` не обмежено наявністю пари в `attempt_questions`. Відповідь на питання, якого не було в спробі, зберігається.
+> - D-05. `invite_codes.revoked boolean` втрачає час відкликання; `mastery_confirmations` має сурогатний ключ без UNIQUE (user_id, topic_id) — допускаються дублікати підтвердження.
+>
+> **2. Цілісність і зв'язки (Referential Integrity)**
+>
+> - R-01. Ролі, статуси, типи (`course_members.role`, `questions.status`, `attempts.mode`, `attempts.status`, `attempt_events.type`, `generation_jobs.status`, `control_events.type`, `invite_codes.role`) мають тип varchar без ENUM або CHECK. Допустимі значення не зафіксовано на рівні СУБД.
+> - R-02. `attempts.control_event_id` не залежить від `mode`: пробний тест без контрольного заходу і звичайна спроба з заходом допустимі.
+> - R-03. `refresh_tokens.replaced_by` не має FK на `refresh_tokens(id)`; сімейство токенів не має обмеження на повторне використання.
+> - R-04. `generation_jobs` не має `course_id` і ініціатора: подію в персональну кімнату ініціатора (SRS-FUN-30) і перевірку доступу до стану задачі (SRS-FUN-52) реалізувати неможливо; добовий ліміт BudgetGuard (SRS-NFR-COST-02) не має часової мітки для агрегації.
+> - R-05. Відсутні сутності, яких вимагає SRS: токени підтвердження пошти і відновлення доступу (SRS-FUN-01, SRS-FUN-55); структура зразка тесту «тема × тип → кількість» і ліміт часу зразка (SRS-FUN-34); публікація пробного тесту (SRS-FUN-35).
+> - R-06. Поведінка FK при видаленні не визначена. SRS-FUN-48 вимагає знеособлення зі збереженням відповідей: ON DELETE CASCADE з `users` знищить відповіді, потрібні для агрегатів курсу.
+> - R-07. `lecture_materials`, `source_tests`, `questions` не мають автора завантаження і створення (`uploaded_by`, `created_by`); журнал SRS-FUN-12 посилається на дію без джерела в даних.
+>
+> **3. Типи даних і продуктивність (Performance & Indexing)**
+>
+> - T-01. `review_states.ef float` і `generation_jobs.cost_usd float`: двійкова плаваюча кома для коефіцієнта з двома знаками і грошової суми. Потрібні NUMERIC(3,2) з CHECK (ef ≥ 1.30) і NUMERIC(10,4).
+> - T-02. `users.email varchar UK` чутливий до регістру: `Student@chnu.edu.ua` і `student@chnu.edu.ua` — два облікові записи. Потрібен citext або UNIQUE на lower(email).
+> - T-03. `refresh_tokens.token_hash varchar`: хеш SHA-256 має фіксовану довжину 32 байти — bytea з CHECK довжини; `generation_jobs.idempotency_key varchar` без UNIQUE не забезпечує ідемпотентності.
+> - T-04. `review_states.last_quality int`, `interval_days int`, `repetitions int` без CHECK; `position int` — достатньо smallint; `size_bytes int` без CHECK ≤ 10 485 760; `page_count` без CHECK ≤ 60.
+> - T-05. Індекси не визначено. Критичні запити без індексу: план на день — `review_states` за (user_id, next_review); історія спроб — `attempts` за (user_id, started_at DESC); вибір питань — `questions` за topic_id лише для approved (частковий B-Tree); стан задачі за ключем — `generation_jobs (idempotency_key)` UNIQUE; лічильник антисписування — `attempt_events (attempt_id, occurred_at)`; членство — `course_members (user_id)` (PK починається з course_id); ліміт витрат — `generation_jobs (created_at)`; журнал — `audit_log` за часом (BRIN для append-only таблиці) і за (entity, entity_id).
+> - T-06. UUID версії 4 з gen_random_uuid() дає випадковий порядок вставки і фрагментацію B-Tree для таблиць з інтенсивним записом (`answers`, `attempt_events`, `audit_log`). Варіанти: UUIDv7, що генерується застосунком, або uuidv7() (вбудована функція з PostgreSQL 18).
+> - T-07. Для `audit_log.meta jsonb` за потреби пошуку за ключами — GIN-індекс (jsonb_path_ops).
+>
+> **4. Аналіз прогалин (Gap Analysis)**
+>
+> - G-01. Відсутні `created_at`, `updated_at` у більшості таблиць; `deleted_at` у `courses` (видалення курсу owner, SRS-FUN-06).
+> - G-02. Відсутнє оптимістичне блокування `questions.version`: два модератори (owner, co-instructor) одночасно редагують чернетку — останній запис перезаписує попередній.
+> - G-03. `attempt_events` не має ідентифікатора події клієнта: буферизовані події (SRS-FUN-38) при повторній доставці дублюються. Потрібен `client_event_id` з UNIQUE (attempt_id, client_event_id).
+> - G-04. `attempt_questions` не зберігає порядок варіантів відповіді: при повторному відкритті спроби рандомізація (SRS-FUN-13) не відтворюється.
+> - G-05. `generation_jobs` без `generation_no`, `source_version`, `model`, `requested_by`, `started_at`, `finished_at`; `questions` без позиції в задачі — обмеження UNIQUE (generation_job_id, position) з ADR-001 (захист від дубліката чернеток при at-least-once) неможливе.
+> - G-06. `audit_log.action`, `audit_log.entity` — довільний текст; перелік дій журналу (SRS-FUN-12) не зафіксовано.
+> - G-07. Не забезпечено інваріант «один owner на курс» (частковий UNIQUE (course_id) WHERE role = 'owner') і UNIQUE (course_id, position) для тем.
+> - G-08. Інваріант «питання типу single має рівно один правильний варіант» не забезпечено (deferred constraint trigger або перевірка в застосунку).
+> - G-09. Відсутній `users.email_verified_at` (SRS-FUN-01: вхід до підтвердження пошти → 403).
+>
+> **Опис сутностей для Розділу 2 (стисло)**
+>
+> users — обліковий запис з корпоративною поштою; refresh_tokens — сімейства refresh-токенів з ротацією; courses — курс дисципліни; course_members — роль користувача в курсі; invite_codes — коди запрошення з роллю і строком дії; topics — упорядковані теми курсу; control_events, control_event_topics — контрольні заходи і їх теми; lecture_materials — PDF лекцій; source_tests — закриті зразки тестів; questions, question_options — питання і варіанти з життєвим циклом draft → approved/rejected; attempts, attempt_questions, answers, answer_options — спроби, видані питання і відповіді; review_states — стан SM-2 «студент × тема»; attempt_events — події антисписування; mastery_confirmations — підтвердження засвоєння викладачем; generation_jobs — задачі генерації з обліком токенів і вартості; audit_log — журнал дій з контентом.
+
+### Рішення щодо зауважень
+
+| Зауваження | Рішення автора | Що змінено |
+|---|---|---|
+| D-01. Поліморфний `source_id` | Прийнято | `lecture_material_id`, `source_test_id` з FK і CHECK відповідності `type` |
+| D-02. Надлишковий `has_text_layer` | Прийнято | Замінено на `text_tokens` (CHECK ≤ 40 000) і `content_sha256` (версія джерела) |
+| D-03. Тема заходу з іншого курсу | Прийнято | Складені FK з `course_id` у `control_event_topics`, `lecture_materials`, `questions`, `source_tests` |
+| D-04. Відповідь поза спробою, чужий варіант | Прийнято | FK `answers (attempt_id, question_id)` → `attempt_questions`; складені FK у `answer_options` |
+| D-05. `revoked boolean`, дублікати підтверджень | Прийнято | `invite_codes.revoked_at`; PK (user_id, topic_id) у `mastery_confirmations` |
+| R-01. varchar замість ENUM | Прийнято | 13 ENUM-типів (табл. 2.9) |
+| R-02. `control_event_id` не залежить від `mode` | Прийнято | CHECK для `mode`, `control_event_id`, `course_id` |
+| R-03. `replaced_by` без FK | Прийнято | FK на `refresh_tokens(id)` |
+| R-04. Задача без курсу та ініціатора | Прийнято | `course_id`, `requested_by`, часові мітки |
+| R-05. Відсутні сутності | Прийнято | `email_tokens`, `source_test_structure`, `mock_tests` |
+| R-06. Поведінка FK при видаленні | Прийнято | RESTRICT за замовчуванням, CASCADE для дочірніх записів, знеособлення користувача |
+| R-07. Немає автора | Прийнято | `uploaded_by`, `created_by`, `approved_by`, `published_by` |
+| T-01…T-04. Типи і CHECK | Прийнято | NUMERIC, citext, bytea з CHECK довжини, smallint, CHECK діапазонів |
+| T-05. Індекси | Прийнято | План з 23 індексів (табл. 2.11) |
+| T-06. UUIDv7 | Відхилено | Залишено `gen_random_uuid()`; перехід на `uuidv7()` у PostgreSQL 18 — напрям розвитку |
+| T-07. GIN для `meta` | Відхилено | Індекс не створюється |
+| G-01…G-07, G-09. Технічні поля | Прийнято | `created_at`, `updated_at`, `deleted_at`, `version`, `client_event_id`, `option_order`, `generation_no`, `model`, ENUM для журналу, часткові UNIQUE, `email_verified_at` |
+| G-08. Тригер для правильних варіантів | Відхилено (тригер) | Інваріант перевіряється DTO (zod) |
+
+### Фінальна версія
+
+ERD, специфікацію таблиць і план індексів наведено в підрозділі 2.7 [2_design.md](2_design.md) (рис. 2.5, табл. 2.9–2.11). Коміт «docs: model chapter 2 data layer as PostgreSQL ERD».
 
 ## Пов'язано
 

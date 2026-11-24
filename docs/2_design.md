@@ -607,6 +607,417 @@ flowchart LR
 
 ## 2.7. Проєктування та документування моделей даних
 
+Шар збереження даних спроєктовано для контейнера PostgreSQL 16 (підрозділ 2.2.2) як реляційну модель у третій нормальній формі. Доступ до даних виконують адаптери Outbound через query builder Kysely з драйвером pg лише параметризованими запитами; зміни схеми фіксуються міграціями Kysely Migrator ([SRS-NFR-SEC-12](./srs.md#srs-nfr-sec-12)). Схему виконано кодом Mermaid.js (`erDiagram`) у нотації Crow's Foot (рис. 2.5); протокол аудиту схеми — [17-AI Insights.md](./17-AI%20Insights.md), Запис 17.
+
+Правила, спільні для всіх таблиць:
+- первинні ключі — `uuid DEFAULT gen_random_uuid()`, крім таблиць зв'язку зі складеними ключами;
+- часові мітки — `timestamptz` (UTC), календарні дати контрольних заходів і повторень — `date`;
+- статуси, ролі й типи — ENUM-типи PostgreSQL (табл. 2.9), значення яких збігаються з enum у контракті API (підрозділ 2.5);
+- зовнішні ключі — `ON DELETE RESTRICT`, крім дочірніх записів складу (позначено CASCADE); облікові записи не видаляються фізично: видалення за [SRS-FUN-48](./srs.md#srs-fun-48) встановлює `deleted_at` і знеособлює `email` і `display_name`, а відповіді зберігаються для агрегатів курсу;
+- складені зовнішні ключі з `course_id` унеможливлюють зв'язок об'єктів різних курсів (тема контрольного заходу, тема матеріалу, тема питання);
+- суми в USD — `numeric(10,4)`, коефіцієнт легкості — `numeric(3,2)`; типи з плаваючою комою не використовуються.
+
+Таблиця 2.9 – ENUM-типи схеми даних
+
+| Тип | Значення | Використання |
+|---|---|---|
+| course_role | owner, co_instructor, student | course_members.role, invite_codes.role |
+| control_event_type | current, module, credit, exam | control_events.type |
+| question_type | single, multi | questions.type, source_test_structure.question_type |
+| question_status | draft, approved, rejected | questions.status |
+| question_source | lecture, source_test, manual | questions.source |
+| attempt_mode | daily_plan, practice, mock_test | attempts.mode |
+| attempt_status | in_progress, finished, expired | attempts.status |
+| attempt_event_type | app_background, app_foreground, screenshot, screen_recording | attempt_events.type |
+| generation_job_type | lecture_test, mock_questions | generation_jobs.type |
+| generation_job_status | queued, processing, done, failed, dead | generation_jobs.status |
+| email_token_purpose | verify_email, reset_password | email_tokens.purpose |
+| audit_action | create, update, approve, reject, delete, upload, publish, role_change, revoke, confirm, password_reset, token_reuse | audit_log.action |
+| audit_entity | course, member, invite_code, topic, control_event, lecture_material, source_test, question, mock_test, mastery, user | audit_log.entity |
+
+```mermaid
+erDiagram
+    users ||--o{ email_tokens : "має"
+    users ||--o{ refresh_tokens : "має"
+    refresh_tokens |o--o| refresh_tokens : "replaced_by"
+    users ||--o{ course_members : "бере участь"
+    courses ||--|{ course_members : "містить"
+    courses ||--o{ invite_codes : "має"
+    courses ||--o{ topics : "містить"
+    courses ||--o{ control_events : "має"
+    control_events ||--|{ control_event_topics : "охоплює"
+    topics ||--o{ control_event_topics : "входить"
+    topics ||--o{ lecture_materials : "має"
+    control_events ||--o{ source_tests : "має"
+    source_tests ||--|{ source_test_structure : "задає"
+    topics ||--o{ source_test_structure : "входить"
+    control_events ||--o| mock_tests : "має"
+    source_tests ||--o{ mock_tests : "є зразком"
+    topics ||--o{ questions : "містить"
+    questions ||--|{ question_options : "має"
+    generation_jobs ||--o{ questions : "створює"
+    source_tests ||--o{ questions : "є джерелом"
+    lecture_materials ||--o{ generation_jobs : "джерело"
+    source_tests ||--o{ generation_jobs : "джерело"
+    users ||--o{ generation_jobs : "ініціює"
+    users ||--o{ attempts : "проходить"
+    control_events ||--o{ attempts : "пробний тест"
+    attempts ||--|{ attempt_questions : "містить"
+    questions ||--o{ attempt_questions : "видається"
+    attempt_questions ||--o| answers : "має відповідь"
+    answers ||--o{ answer_options : "обирає"
+    question_options ||--o{ answer_options : "обрано"
+    users ||--o{ review_states : "має"
+    topics ||--o{ review_states : "має"
+    attempts ||--o{ attempt_events : "фіксує"
+    users ||--o{ mastery_confirmations : "отримує"
+    topics ||--o{ mastery_confirmations : "підтверджено"
+    users ||--o{ audit_log : "виконує"
+
+    users {
+        uuid id PK
+        citext email UK "до 254 символів"
+        timestamptz email_verified_at "NULL"
+        varchar display_name "VARCHAR(64)"
+        varchar password_hash "Argon2id, PHC"
+        timestamptz created_at
+        timestamptz updated_at
+        timestamptz deleted_at "NULL"
+    }
+    email_tokens {
+        uuid id PK
+        uuid user_id FK
+        email_token_purpose purpose
+        bytea token_hash UK "SHA-256, 32 байти"
+        timestamptz expires_at
+        timestamptz used_at "NULL"
+        timestamptz created_at
+    }
+    refresh_tokens {
+        uuid id PK
+        uuid user_id FK
+        uuid family_id
+        bytea token_hash UK "SHA-256, 32 байти"
+        timestamptz expires_at
+        timestamptz revoked_at "NULL"
+        uuid replaced_by FK "NULL"
+        timestamptz created_at
+    }
+    courses {
+        uuid id PK
+        varchar title "VARCHAR(200)"
+        uuid created_by FK
+        timestamptz created_at
+        timestamptz updated_at
+        timestamptz deleted_at "NULL"
+    }
+    course_members {
+        uuid course_id PK,FK
+        uuid user_id PK,FK
+        course_role role
+        timestamptz joined_at
+    }
+    invite_codes {
+        uuid id PK
+        uuid course_id FK
+        char code UK "CHAR(8)"
+        course_role role "CHECK <> owner"
+        timestamptz expires_at
+        timestamptz revoked_at "NULL"
+        uuid created_by FK
+        timestamptz created_at
+    }
+    topics {
+        uuid id PK
+        uuid course_id FK
+        varchar title "VARCHAR(200)"
+        smallint position "UK з course_id"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    control_events {
+        uuid id PK
+        uuid course_id FK
+        control_event_type type
+        varchar title "VARCHAR(200)"
+        date event_date
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    control_event_topics {
+        uuid control_event_id PK,FK
+        uuid topic_id PK,FK
+        uuid course_id FK "складені FK"
+    }
+    lecture_materials {
+        uuid id PK
+        uuid course_id FK
+        uuid topic_id FK
+        varchar storage_key UK
+        varchar original_name
+        integer size_bytes "1..10485760"
+        smallint page_count "1..60"
+        integer text_tokens "1..40000"
+        bytea content_sha256 "версія джерела"
+        uuid uploaded_by FK
+        timestamptz created_at
+    }
+    source_tests {
+        uuid id PK
+        uuid course_id FK
+        uuid control_event_id FK
+        varchar storage_key UK
+        varchar original_name
+        integer size_bytes "1..10485760"
+        smallint page_count "1..60"
+        integer text_tokens "1..40000"
+        bytea content_sha256 "версія джерела"
+        smallint time_limit_minutes "1..240"
+        uuid uploaded_by FK
+        timestamptz created_at
+    }
+    source_test_structure {
+        uuid source_test_id PK,FK
+        uuid topic_id PK,FK
+        question_type question_type PK
+        smallint question_count "1..100"
+    }
+    mock_tests {
+        uuid id PK
+        uuid control_event_id FK,UK
+        uuid source_test_id FK
+        uuid published_by FK
+        timestamptz published_at
+    }
+    questions {
+        uuid id PK
+        uuid course_id FK
+        uuid topic_id FK
+        question_type type
+        question_status status
+        question_source source
+        text stem "1..2000 символів"
+        text explanation "NULL"
+        uuid generation_job_id FK "NULL"
+        uuid source_test_id FK "NULL"
+        smallint position "NULL, UK з generation_job_id"
+        varchar reject_reason "NULL, VARCHAR(500)"
+        uuid approved_by FK "NULL"
+        timestamptz approved_at "NULL"
+        uuid created_by FK "NULL"
+        integer version "оптимістичне блокування"
+        timestamptz created_at
+        timestamptz updated_at
+    }
+    question_options {
+        uuid id PK
+        uuid question_id FK
+        varchar text "VARCHAR(500)"
+        boolean is_correct
+        smallint position "1..8"
+    }
+    attempts {
+        uuid id PK
+        uuid user_id FK
+        uuid course_id FK "NULL для daily_plan"
+        attempt_mode mode
+        uuid control_event_id FK "NULL"
+        attempt_status status
+        timestamptz started_at
+        timestamptz deadline_at
+        timestamptz finished_at "NULL"
+    }
+    attempt_questions {
+        uuid attempt_id PK,FK
+        uuid question_id PK,FK
+        smallint position
+        smallint_array option_order "SMALLINT[]"
+    }
+    answers {
+        uuid id PK
+        uuid attempt_id FK "UK з question_id"
+        uuid question_id FK
+        boolean is_correct
+        timestamptz answered_at
+    }
+    answer_options {
+        uuid answer_id PK,FK
+        uuid option_id PK,FK
+        uuid question_id FK "складені FK"
+    }
+    review_states {
+        uuid user_id PK,FK
+        uuid topic_id PK,FK
+        numeric ef "NUMERIC(3,2) >= 1.30"
+        integer interval_days ">= 0"
+        integer repetitions ">= 0"
+        date next_review
+        smallint last_quality "0..5"
+        timestamptz updated_at
+    }
+    attempt_events {
+        uuid id PK
+        uuid attempt_id FK
+        uuid client_event_id "UK з attempt_id"
+        attempt_event_type type
+        timestamptz occurred_at
+        integer duration_ms "NULL, >= 0"
+        timestamptz received_at
+    }
+    mastery_confirmations {
+        uuid user_id PK,FK
+        uuid topic_id PK,FK
+        uuid confirmed_by FK
+        timestamptz confirmed_at
+    }
+    generation_jobs {
+        uuid id PK
+        uuid course_id FK
+        generation_job_type type
+        uuid lecture_material_id FK "NULL"
+        uuid source_test_id FK "NULL"
+        smallint generation_no ">= 1"
+        bytea idempotency_key UK "SHA-256"
+        generation_job_status status
+        smallint attempts_made "0..3"
+        varchar error "NULL"
+        varchar model "NULL"
+        integer tokens_in ">= 0"
+        integer tokens_out ">= 0"
+        numeric cost_usd "NUMERIC(10,4)"
+        smallint drafts_count ">= 0"
+        uuid requested_by FK
+        timestamptz created_at
+        timestamptz started_at "NULL"
+        timestamptz finished_at "NULL"
+    }
+    audit_log {
+        uuid id PK
+        uuid actor_id FK
+        audit_action action
+        audit_entity entity
+        uuid entity_id
+        timestamptz at
+        jsonb meta "NULL, object"
+    }
+```
+
+Рисунок 2.5 – Схема даних системи Recall (ERD, PostgreSQL 16)
+
+### 2.7.1. Специфікація таблиць
+
+Специфікацію таблиць наведено в табл. 2.10. Для кожної таблиці вказано поля, що не повторюють загальних правил: `id`, `created_at`, `updated_at` мають тип і обмеження, наведені вище.
+
+Таблиця 2.10 – Специфікація таблиць схеми даних
+
+| Таблиця | Поле | Тип | Обмеження | Опис |
+|---|---|---|---|---|
+| users | email | citext | NOT NULL, UNIQUE, CHECK (char_length ≤ 254), домен перевіряє застосунок за переліком дозволених | Корпоративна пошта, ідентифікатор входу ([SRS-FUN-01](./srs.md#srs-fun-01)) |
+| users | email_verified_at | timestamptz | NULL до підтвердження | Вхід до підтвердження → 403 |
+| users | display_name | varchar(64) | NOT NULL | Ім'я або псевдонім |
+| users | password_hash | varchar(255) | NOT NULL | Рядок PHC Argon2id з параметрами і сіллю ([SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03)) |
+| users | deleted_at | timestamptz | NULL | Мітка знеособлення ([SRS-FUN-48](./srs.md#srs-fun-48)) |
+| email_tokens | user_id | uuid | FK → users, CASCADE | Власник токена |
+| email_tokens | purpose | email_token_purpose | NOT NULL | Підтвердження пошти (24 год) або відновлення доступу (30 хв) |
+| email_tokens | token_hash | bytea | NOT NULL, UNIQUE, CHECK (octet_length = 32) | SHA-256 від одноразового токена посилання; сам токен не зберігається ([SRS-FUN-55](./srs.md#srs-fun-55)) |
+| email_tokens | expires_at, used_at | timestamptz | expires_at NOT NULL; used_at NULL | Строк дії і час використання; повторне використання відхиляється |
+| refresh_tokens | user_id | uuid | FK → users, CASCADE | Власник |
+| refresh_tokens | family_id | uuid | NOT NULL | Сімейство токенів однієї сесії: відкликання при виході ([SRS-FUN-53](./srs.md#srs-fun-53)) і при повторному використанні ([SRS-NFR-SEC-02](./srs.md#srs-nfr-sec-02)) |
+| refresh_tokens | token_hash | bytea | NOT NULL, UNIQUE, CHECK (octet_length = 32) | SHA-256 від refresh-токена |
+| refresh_tokens | expires_at, revoked_at | timestamptz | expires_at = created_at + 30 днів; revoked_at NULL | Строк дії і відкликання |
+| refresh_tokens | replaced_by | uuid | FK → refresh_tokens, NULL | Наступний токен після ротації |
+| courses | title | varchar(200) | NOT NULL | Назва дисципліни ([SRS-FUN-07](./srs.md#srs-fun-07)) |
+| courses | created_by | uuid | FK → users | Автор курсу (отримує роль owner) |
+| courses | deleted_at | timestamptz | NULL | Видалення курсу owner ([SRS-FUN-06](./srs.md#srs-fun-06)) |
+| course_members | course_id, user_id | uuid | PK; FK → courses, users | Членство |
+| course_members | role | course_role | NOT NULL; частковий UNIQUE (course_id) WHERE role = 'owner' | Роль у курсі, рівно один owner ([SRS-FUN-03](./srs.md#srs-fun-03)) |
+| invite_codes | code | char(8) | NOT NULL, UNIQUE, CHECK (code ~ '^[A-HJ-NP-Z2-9]{8}$') | Код без символів, що плутаються (I, O, 0, 1) |
+| invite_codes | role | course_role | NOT NULL, CHECK (role <> 'owner') | Роль, що призначається ([SRS-FUN-04](./srs.md#srs-fun-04)) |
+| invite_codes | expires_at, revoked_at | timestamptz | expires_at NOT NULL (за замовчуванням created_at + 7 днів); revoked_at NULL | Строк дії і відкликання ([SRS-FUN-05](./srs.md#srs-fun-05)) |
+| topics | course_id, position | uuid, smallint | FK → courses; UNIQUE (course_id, position); UNIQUE (id, course_id) | Упорядкований перелік тем |
+| control_events | type, event_date | control_event_type, date | NOT NULL; UNIQUE (id, course_id) | Тип і дата контрольного заходу ([SRS-FUN-08](./srs.md#srs-fun-08)) |
+| control_event_topics | control_event_id, topic_id, course_id | uuid | PK (control_event_id, topic_id); FK (control_event_id, course_id) → control_events, FK (topic_id, course_id) → topics, CASCADE | Теми заходу лише того самого курсу |
+| lecture_materials | topic_id, course_id | uuid | FK (topic_id, course_id) → topics | Прив'язка до теми ([SRS-FUN-09](./srs.md#srs-fun-09)) |
+| lecture_materials | storage_key | varchar(128) | NOT NULL, UNIQUE | Ключ файлу в File Storage; оригінальна назва файлу в шляху не використовується |
+| lecture_materials | size_bytes, page_count, text_tokens | integer, smallint, integer | CHECK (size_bytes BETWEEN 1 AND 10485760), CHECK (page_count BETWEEN 1 AND 60), CHECK (text_tokens BETWEEN 1 AND 40000) | Обмеження [SRS-NFR-SEC-07](./srs.md#srs-nfr-sec-07), [SRS-FUN-51](./srs.md#srs-fun-51) |
+| lecture_materials | content_sha256 | bytea | NOT NULL, CHECK (octet_length = 32) | Версія джерела для ключа ідемпотентності |
+| source_tests | control_event_id, course_id | uuid | FK (control_event_id, course_id) → control_events | Зразок належить контрольному заходу ([SRS-FUN-10](./srs.md#srs-fun-10)); доступ лише owner і co-instructor ([SRS-FUN-11](./srs.md#srs-fun-11)) |
+| source_tests | time_limit_minutes | smallint | NOT NULL, CHECK (BETWEEN 1 AND 240) | Ліміт часу зразка для пробного тесту ([SRS-FUN-34](./srs.md#srs-fun-34)) |
+| source_tests | size_bytes, page_count, text_tokens, content_sha256 | — | Як у lecture_materials | — |
+| source_test_structure | source_test_id, topic_id, question_type | uuid, uuid, question_type | PK зі всіх трьох полів; FK → source_tests CASCADE, topics | Структура зразка «тема × тип» |
+| source_test_structure | question_count | smallint | NOT NULL, CHECK (BETWEEN 1 AND 100) | Кількість питань комбінації |
+| mock_tests | control_event_id | uuid | FK → control_events, UNIQUE | Один опублікований пробний тест на захід ([SRS-FUN-35](./srs.md#srs-fun-35)) |
+| mock_tests | source_test_id, published_by, published_at | uuid, uuid, timestamptz | NOT NULL | Зразок, автор і час публікації |
+| questions | course_id, topic_id | uuid | FK (topic_id, course_id) → topics | Тема питання ([SRS-FUN-33](./srs.md#srs-fun-33)) |
+| questions | type, status, source | question_type, question_status, question_source | NOT NULL; status DEFAULT 'draft' | Тип, життєвий цикл модерації, походження |
+| questions | stem, explanation | text | stem NOT NULL, CHECK (char_length BETWEEN 1 AND 2000); explanation NULL, ≤ 2000 | Формулювання і пояснення |
+| questions | generation_job_id, position | uuid, smallint | FK → generation_jobs NULL; UNIQUE (generation_job_id, position) | Захист від дублікатів чернеток при повторній обробці задачі (ADR-001) |
+| questions | source_test_id | uuid | FK → source_tests NULL; CHECK ((source = 'source_test') = (source_test_id IS NOT NULL)) | Зразок, за яким згенеровано тренувальне питання |
+| questions | reject_reason | varchar(500) | CHECK ((status = 'rejected') = (reject_reason IS NOT NULL)) | Причина відхилення |
+| questions | approved_by, approved_at | uuid, timestamptz | CHECK ((status = 'approved') = (approved_by IS NOT NULL AND approved_at IS NOT NULL)) | Хто і коли схвалив ([SRS-FUN-28](./srs.md#srs-fun-28)) |
+| questions | version | integer | NOT NULL DEFAULT 1 | Оптимістичне блокування: UPDATE … WHERE version = :v, інакше 409 |
+| question_options | question_id, position | uuid, smallint | FK → questions CASCADE; UNIQUE (question_id, position); UNIQUE (question_id, id); CHECK (position BETWEEN 1 AND 8) | Варіант відповіді |
+| question_options | is_correct | boolean | NOT NULL | Ознака правильності; не передається студенту ([SRS-FUN-14](./srs.md#srs-fun-14)) |
+| attempts | user_id | uuid | FK → users | Власник спроби ([SRS-FUN-54](./srs.md#srs-fun-54)) |
+| attempts | course_id, mode, control_event_id | uuid, attempt_mode, uuid | CHECK ((mode = 'daily_plan') = (course_id IS NULL)); CHECK ((mode = 'mock_test') = (control_event_id IS NOT NULL)) | План на день охоплює кілька курсів; пробний тест прив'язано до заходу |
+| attempts | status, started_at, deadline_at, finished_at | attempt_status, timestamptz | CHECK (deadline_at > started_at); CHECK ((status = 'in_progress') = (finished_at IS NULL)) | Серверний таймер ([SRS-FUN-15](./srs.md#srs-fun-15)) |
+| attempt_questions | attempt_id, question_id | uuid | PK; FK → attempts CASCADE, questions | Питання, видані в спробі |
+| attempt_questions | position, option_order | smallint, smallint[] | UNIQUE (attempt_id, position); option_order NOT NULL | Збережений рандомізований порядок питань і варіантів ([SRS-FUN-13](./srs.md#srs-fun-13)) |
+| answers | attempt_id, question_id | uuid | FK (attempt_id, question_id) → attempt_questions; UNIQUE (attempt_id, question_id); UNIQUE (id, question_id) | Ідемпотентна відповідь ([SRS-FUN-16](./srs.md#srs-fun-16)) |
+| answers | is_correct, answered_at | boolean, timestamptz | NOT NULL | Результат перевірки на сервері |
+| answer_options | answer_id, question_id, option_id | uuid | PK (answer_id, option_id); FK (answer_id, question_id) → answers (id, question_id) CASCADE; FK (question_id, option_id) → question_options (question_id, id) | Обраний варіант належить питанню відповіді |
+| review_states | user_id, topic_id | uuid | PK; FK → users, topics | Стан SM-2 «студент × тема» ([SRS-FUN-19](./srs.md#srs-fun-19)) |
+| review_states | ef | numeric(3,2) | NOT NULL DEFAULT 2.50, CHECK (ef >= 1.30) | Коефіцієнт легкості |
+| review_states | interval_days, repetitions | integer | NOT NULL, CHECK (>= 0) | Інтервал і кількість успішних повторень |
+| review_states | next_review, last_quality | date, smallint | next_review NOT NULL; CHECK (last_quality BETWEEN 0 AND 5) | Дата повторення і останнє q (табл. А.1) |
+| attempt_events | attempt_id, client_event_id | uuid | FK → attempts CASCADE; UNIQUE (attempt_id, client_event_id) | Подія антисписування; повторна доставка з буфера клієнта не створює дубліката ([SRS-FUN-38](./srs.md#srs-fun-38)) |
+| attempt_events | type, occurred_at, duration_ms | attempt_event_type, timestamptz, integer | duration_ms NULL, CHECK (duration_ms BETWEEN 0 AND 86400000) | Тип, час на пристрої, тривалість поза тестом ([SRS-FUN-37](./srs.md#srs-fun-37)); видалення через 90 днів ([SRS-FUN-49](./srs.md#srs-fun-49)) |
+| mastery_confirmations | user_id, topic_id, confirmed_by, confirmed_at | uuid, uuid, uuid, timestamptz | PK (user_id, topic_id); FK → users, topics | Підтвердження засвоєння ([SRS-FUN-47](./srs.md#srs-fun-47)) |
+| generation_jobs | course_id, requested_by | uuid | FK → courses, users | Курс і ініціатор: доступ до стану ([SRS-FUN-52](./srs.md#srs-fun-52)) і персональна кімната події ([SRS-FUN-30](./srs.md#srs-fun-30)) |
+| generation_jobs | type, lecture_material_id, source_test_id | generation_job_type, uuid, uuid | FK NULL; CHECK ((type = 'lecture_test' AND lecture_material_id IS NOT NULL AND source_test_id IS NULL) OR (type = 'mock_questions' AND source_test_id IS NOT NULL AND lecture_material_id IS NULL)) | Джерело задачі з цілісністю посилань |
+| generation_jobs | generation_no, idempotency_key | smallint, bytea | CHECK (generation_no >= 1); idempotency_key NOT NULL, UNIQUE, CHECK (octet_length = 32) | idempotency_key := SHA-256(type, source_id, content_sha256, generation_no) ([SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02)) |
+| generation_jobs | status, attempts_made, error | generation_job_status, smallint, varchar(1000) | status DEFAULT 'queued'; CHECK (attempts_made BETWEEN 0 AND 3) | Стан задачі; dead — після третьої невдалої спроби ([SRS-NFR-ASYNC-03](./srs.md#srs-nfr-async-03)) |
+| generation_jobs | model, tokens_in, tokens_out, cost_usd | varchar(64), integer, integer, numeric(10,4) | CHECK (>= 0); DEFAULT 0 | Облік викликів Claude API ([SRS-NFR-COST-01](./srs.md#srs-nfr-cost-01)) |
+| generation_jobs | drafts_count, started_at, finished_at | smallint, timestamptz | CHECK (drafts_count >= 0); NULL | Результат і тривалість ([SRS-NFR-ASYNC-02](./srs.md#srs-nfr-async-02)) |
+| audit_log | actor_id, action, entity, entity_id, at | uuid, audit_action, audit_entity, uuid, timestamptz | NOT NULL; FK actor_id → users | Журнал дій ([SRS-FUN-12](./srs.md#srs-fun-12)); лише INSERT |
+| audit_log | meta | jsonb | NULL, CHECK (jsonb_typeof(meta) = 'object') | Додаткові атрибути дії без персональних даних |
+
+Інваріант «питання типу single має рівно один правильний варіант, multi — щонайменше один» перевіряється схемою DTO (zod) під час збереження і модерації питання. Тригер СУБД для нього не застосовано: він ускладнює міграції і не додає гарантій, оскільки змінювати питання може лише ModerationService.
+
+### 2.7.2. План індексів
+
+Індекси первинних ключів і обмежень UNIQUE створюються автоматично; у табл. 2.11 наведено індекси, що прискорюють запити критичних сценаріїв. Тип — B-Tree, якщо не вказано інше.
+
+Таблиця 2.11 – План індексів
+
+| Індекс | Таблиця (поля) | Тип | Запит, який прискорює | SRS-ID |
+|---|---|---|---|---|
+| users_email_key | users (email) | UNIQUE | Вхід і перевірка наявної пошти при реєстрації | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-02](./srs.md#srs-fun-02) |
+| email_tokens_token_hash_key | email_tokens (token_hash) | UNIQUE | Перевірка посилання підтвердження і відновлення | [SRS-FUN-55](./srs.md#srs-fun-55) |
+| refresh_tokens_token_hash_key | refresh_tokens (token_hash) | UNIQUE | Оновлення токена | [SRS-NFR-SEC-02](./srs.md#srs-nfr-sec-02) |
+| refresh_tokens_family_active_idx | refresh_tokens (family_id) WHERE revoked_at IS NULL | Частковий | Відкликання сімейства при виході і повторному використанні | [SRS-FUN-53](./srs.md#srs-fun-53) |
+| course_members_user_idx | course_members (user_id) | — | Курси користувача; PK (course_id, user_id) покриває перевірку ролі | [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05) |
+| course_members_owner_key | course_members (course_id) WHERE role = 'owner' | UNIQUE частковий | Інваріант одного owner | [SRS-FUN-03](./srs.md#srs-fun-03) |
+| invite_codes_code_key | invite_codes (code) | UNIQUE | Приєднання за кодом | [SRS-FUN-05](./srs.md#srs-fun-05) |
+| control_event_topics_topic_idx | control_event_topics (topic_id) | — | Найближчий захід теми (d_event) | [SRS-FUN-20](./srs.md#srs-fun-20) |
+| control_events_course_date_idx | control_events (course_id, event_date) | — | Заходи курсу за датою | [SRS-FUN-20](./srs.md#srs-fun-20) |
+| questions_topic_approved_idx | questions (topic_id) WHERE status = 'approved' | Частковий | Вибір питань для тесту, плану і пробного тесту | [SRS-FUN-29](./srs.md#srs-fun-29), [SRS-FUN-50](./srs.md#srs-fun-50) |
+| questions_course_draft_idx | questions (course_id, created_at) WHERE status = 'draft' | Частковий | Черга модерації з пагінацією | [SRS-FUN-28](./srs.md#srs-fun-28) |
+| questions_job_position_key | questions (generation_job_id, position) | UNIQUE | Захист від дублікатів чернеток | [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02) |
+| attempts_user_started_idx | attempts (user_id, started_at DESC) | — | Історія спроб і попередня спроба студента | [SRS-FUN-50](./srs.md#srs-fun-50), [SRS-FUN-54](./srs.md#srs-fun-54) |
+| attempts_in_progress_deadline_idx | attempts (deadline_at) WHERE status = 'in_progress' | Частковий | Завершення прострочених спроб за серверним таймером | [SRS-FUN-15](./srs.md#srs-fun-15) |
+| answers_attempt_question_key | answers (attempt_id, question_id) | UNIQUE | Ідемпотентна фіксація відповіді | [SRS-FUN-16](./srs.md#srs-fun-16) |
+| answers_question_idx | answers (question_id) | — | Засвоєння «студент × тема», питання з неправильними відповідями | [SRS-FUN-46](./srs.md#srs-fun-46), [SRS-FUN-50](./srs.md#srs-fun-50) |
+| review_states_user_next_idx | review_states (user_id, next_review) | — | Відбір тем-кандидатів плану на день | [SRS-FUN-20](./srs.md#srs-fun-20), [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01) |
+| attempt_events_attempt_time_idx | attempt_events (attempt_id, occurred_at) | — | Лічильник виходів і час поза тестом | [SRS-FUN-39](./srs.md#srs-fun-39) |
+| attempt_events_client_key | attempt_events (attempt_id, client_event_id) | UNIQUE | Дедуплікація подій з буфера клієнта | [SRS-FUN-38](./srs.md#srs-fun-38) |
+| generation_jobs_idempotency_key | generation_jobs (idempotency_key) | UNIQUE | Ідемпотентна постановка задачі | [SRS-FUN-22](./srs.md#srs-fun-22), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02) |
+| generation_jobs_created_idx | generation_jobs (created_at) INCLUDE (cost_usd) | Покривний | Сума вартості за поточну добу UTC (BudgetGuard) | [SRS-NFR-COST-02](./srs.md#srs-nfr-cost-02) |
+| audit_log_at_brin | audit_log (at) | BRIN | Вибірка журналу за періодом у таблиці лише з INSERT | [SRS-FUN-12](./srs.md#srs-fun-12) |
+| audit_log_entity_idx | audit_log (entity, entity_id, at DESC) | — | Історія дій з об'єктом | [SRS-FUN-12](./srs.md#srs-fun-12) |
+
+Ключі UUID версії 4 (`gen_random_uuid()`) залишено для всіх таблиць: за цільового обсягу (50 000 відповідей, умови [SRS-NFR-PERF-01](./srs.md#srs-nfr-perf-01)) фрагментація B-Tree від випадкового порядку вставки не впливає на метрики Latency. Перехід на `uuidv7()` можливий після оновлення до PostgreSQL 18 без зміни типу стовпців. GIN-індекс для `audit_log.meta` не створюється: жоден сценарій SRS не виконує пошуку за ключами `meta`.
+
 ## 2.8. Моделювання логіки критичних вузлів системи
 
 ## 2.9. Інтеграційний аудит та висновок про готовність архітектури
