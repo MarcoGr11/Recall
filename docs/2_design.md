@@ -149,7 +149,7 @@ flowchart TB
     recall["<b>Recall</b><br/>[Software System]<br/>Адаптивна підготовка до сесії:<br/>тестування, SM-2, генерація контенту,<br/>live-моніторинг"]
     claude["<b>Claude API</b><br/>[External System: Anthropic]<br/>Генерація чернеток тестів,<br/>сценаріїв і тренувальних питань"]
     os["<b>Мобільна ОС</b><br/>[External System: Android, iOS]<br/>AppState, захист екрана,<br/>Keystore / Keychain, TalkBack / VoiceOver"]
-    smtp["<b>Поштовий сервер</b><br/>[External System: SMTP]<br/>Листи підтвердження пошти<br/>і відновлення доступу"]
+    smtp["<b>SMTP-провайдер</b><br/>[External System: SMTP]<br/>Листи підтвердження пошти<br/>і відновлення доступу"]
     lms["<b>LMS закладу (Moodle)</b><br/>[External System]<br/>Поза MVP"]
 
     student -- "Тести, план на день<br/>[сенсорний інтерфейс]" --> recall
@@ -180,7 +180,7 @@ flowchart TB
 | Recall | Software System | React Native, Node.js, PostgreSQL, Redis | Тестування, планування повторень за SM-2, асинхронна генерація контенту, пробні тести, антисписування, live-моніторинг | [SRS-FUN-01](./srs.md#srs-fun-01)…[SRS-FUN-49](./srs.md#srs-fun-49) |
 | Claude API | External System | Anthropic Claude Messages API | Генерація чернеток тестів, сценаріїв і тренувальних питань | [SRS-FUN-24](./srs.md#srs-fun-24), [SRS-FUN-25](./srs.md#srs-fun-25), [SRS-FUN-31](./srs.md#srs-fun-31) |
 | Мобільна ОС | External System | Android 10+, iOS 16+ | Події AppState, захист екрана, Keystore / Keychain, TalkBack / VoiceOver | [SRS-FUN-37](./srs.md#srs-fun-37), [SRS-FUN-40](./srs.md#srs-fun-40), [SRS-FUN-41](./srs.md#srs-fun-41), [SRS-NFR-SEC-04](./srs.md#srs-nfr-sec-04), [SRS-NFR-A11Y-02](./srs.md#srs-nfr-a11y-02) |
-| Поштовий сервер | External System | SMTP (порт 587, STARTTLS) | Доставка листів підтвердження корпоративної пошти і відновлення доступу | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
+| SMTP-провайдер | External System | SMTP (порт 587, STARTTLS) | Доставка листів підтвердження корпоративної пошти і відновлення доступу | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | LMS закладу (Moodle) | External System, поза MVP | LTI 1.3 | Інтеграцію не реалізовано; показано для фіксації межі системи | — |
 
 Таблиця 2.4 – Зв'язки діаграми контексту
@@ -191,7 +191,7 @@ flowchart TB
 | Викладач | Recall | Сенсорний інтерфейс мобільного застосунку | Керування курсом, модерація, моніторинг групи |
 | Recall | Claude API | HTTPS (Claude Messages API, JSON) | Передача тексту лекцій і зразків тестів без персональних даних; отримання результату генерації |
 | Recall | Мобільна ОС | API ОС через Expo SDK | Події стану застосунку, захист екрана, захищене сховище токенів |
-| Recall | Поштовий сервер | SMTP, порт 587, STARTTLS | Листи підтвердження пошти і відновлення доступу з одноразовими посиланнями |
+| Recall | SMTP-провайдер | SMTP, порт 587, STARTTLS | Листи підтвердження пошти і відновлення доступу з одноразовими посиланнями |
 | Recall | LMS закладу | LTI 1.3 (поза MVP) | Напрям розвитку |
 
 ### 2.2.2. Діаграма контейнерів (Level 2)
@@ -223,7 +223,7 @@ flowchart TB
     end
 
     claude["<b>Claude API</b><br/>[External System: Anthropic]"]
-    smtp["<b>Поштовий сервер</b><br/>[External System: SMTP]"]
+    smtp["<b>SMTP-провайдер</b><br/>[External System: SMTP]"]
     lms["<b>LMS закладу (Moodle)</b><br/>[External System]"]
 
     student -- "Використовує<br/>[сенсорний інтерфейс]" --> mobile
@@ -269,7 +269,7 @@ flowchart TB
 | File Storage | Container (Storage) | Docker volume | Зберігання PDF лекцій і зразків тестів; доступ на запис — Backend API, на читання — Generation Worker; поза доступом клієнта | [SRS-FUN-09](./srs.md#srs-fun-09), [SRS-FUN-10](./srs.md#srs-fun-10), [SRS-FUN-11](./srs.md#srs-fun-11) |
 | Claude API | External System | Anthropic Claude Messages API | Генерація контенту за запитом Generation Worker | [SRS-FUN-24](./srs.md#srs-fun-24), [SRS-FUN-31](./srs.md#srs-fun-31) |
 | Мобільна ОС | External System | Android 10+, iOS 16+ | AppState, screen capture, Keystore / Keychain, TalkBack / VoiceOver | [SRS-FUN-37](./srs.md#srs-fun-37), [SRS-FUN-40](./srs.md#srs-fun-40), [SRS-FUN-41](./srs.md#srs-fun-41), [SRS-NFR-SEC-04](./srs.md#srs-nfr-sec-04), [SRS-NFR-A11Y-02](./srs.md#srs-nfr-a11y-02) |
-| Поштовий сервер | External System | SMTP (порт 587, STARTTLS) | Доставка листів, надісланих Backend API | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
+| SMTP-провайдер | External System | SMTP (порт 587, STARTTLS) | Доставка листів, надісланих Backend API | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | LMS закладу (Moodle) | External System, поза MVP | LTI 1.3 | Напрям розвитку | — |
 
 Розгортання всіх серверних контейнерів у docker-compose з healthcheck і `restart: unless-stopped` реалізує [SRS-NFR-INFRA-01](./srs.md#srs-nfr-infra-01). Контур CI (GitHub Actions, npm audit, Trivy, SonarQube Cloud) не є елементом runtime і на діаграмі не показаний; він реалізує [SRS-NFR-SEC-09](./srs.md#srs-nfr-sec-09)…[SRS-NFR-SEC-11](./srs.md#srs-nfr-sec-11) і [SRS-NFR-MAINT-01](./srs.md#srs-nfr-maint-01). Поточний `docker-compose.yml` не містить Reverse Proxy, Generation Worker, Backup Job і сегментації мереж, а також публікує порти 5432 і 6379, не вмикає AOF і restart policy; конвеєр CI наразі виконує лише lint і модульні тести. Приведення конфігурації до діаграми виконується на етапі реалізації.
@@ -290,7 +290,7 @@ flowchart TB
 | Generation Worker | PostgreSQL 16 | SQL/TCP 5432 | Збереження чернеток, стану задачі, токенів і вартості в generation_jobs |
 | Generation Worker | File Storage | Файлова система (volume) | Читання PDF для парсингу |
 | Generation Worker | Claude API | HTTPS (Claude Messages API, JSON) | Генерація контенту |
-| Backend API | Поштовий сервер | SMTP, порт 587, STARTTLS | Листи підтвердження пошти і відновлення доступу |
+| Backend API | SMTP-провайдер | SMTP, порт 587, STARTTLS | Листи підтвердження пошти і відновлення доступу |
 | Backup Job | PostgreSQL 16 | SQL/TCP 5432 (pg_dump) | Щоденне резервне копіювання |
 | Backend API | LMS закладу | LTI 1.3 (поза MVP) | Напрям розвитку |
 
@@ -449,13 +449,14 @@ flowchart LR
         pgRepo["<b>Pg*Repository, PgTransactionManager</b><br/>[Kysely, pg]"]
         fileS["<b>LocalFileStorage</b><br/>[fs, Docker volume]"]
         smtpS["<b>SmtpMailSender</b><br/>[nodemailer]"]
+        consoleS["<b>ConsoleMailSender</b><br/>[dev/test: лист у журнал]"]
         mq["<b>BullMqJobQueue</b><br/>[BullMQ Queue]"]
     end
 
     db[("PostgreSQL 16")]
     redis[("Redis 7")]
     vol[("File Storage")]
-    mailsrv["Поштовий сервер"]
+    mailsrv["SMTP-провайдер"]
 
     authC --> authS
     guardC --> accessS
@@ -520,13 +521,14 @@ flowchart LR
     jobL -- "RESP/TCP 6379" --> redis
     fileS -- "файлова система" --> vol
     smtpS -. "implements IMailSender" .-> iMail
+    consoleS -. "implements IMailSender" .-> iMail
     smtpS -- "SMTP, 587, STARTTLS" --> mailsrv
 
     classDef comp fill:#438dd5,stroke:#2e6295,color:#fff
     classDef pure fill:#2e7d32,stroke:#1b5e20,color:#fff
     classDef port fill:#ffffff,stroke:#2e6295,color:#000,stroke-dasharray:4 3
     classDef store fill:#999999,stroke:#6b6b6b,color:#fff
-    class authC,courseC,attemptC,planC,mockC,genC,modC,monC,acC,privC,gw,jobL,guardC,healthC,authS,accessS,healthS,courseS,invS,delivS,attemptS,prio,mockS,genS,budget,modS,mastS,acS,pub,audit,privS,pgRepo,fileS,mq,smtpS comp
+    class authC,courseC,attemptC,planC,mockC,genC,modC,monC,acC,privC,gw,jobL,guardC,healthC,authS,accessS,healthS,courseS,invS,delivS,attemptS,prio,mockS,genS,budget,modS,mastS,acS,pub,audit,privS,pgRepo,fileS,mq,smtpS,consoleS comp
     class scorer,sm2 pure
     class iUser,iToken,iEmailTok,iMail,iCourse,iAttempt,iReview,iQRead,iQWrite,iAc,iAudit,iGenJob,iTx,iFile,iQueue port
     class db,redis,vol,mailsrv store
@@ -581,10 +583,11 @@ flowchart LR
 | ProgressPublisher | Core | Шина доменних подій (EventEmitter) для прогресу, антисписування і задач генерації | — | [SRS-FUN-30](./srs.md#srs-fun-30), [SRS-FUN-39](./srs.md#srs-fun-39), [SRS-FUN-43](./srs.md#srs-fun-43) |
 | ContentAuditLog | Core | Журнал дій з контентом | IAuditLogRepository | [SRS-FUN-12](./srs.md#srs-fun-12) |
 | PrivacyService | Core | Видалення облікового запису зі знеособленням, видалення подій антисписування за строком | IUserRepository, IAntiCheatEventRepository | [SRS-FUN-48](./srs.md#srs-fun-48), [SRS-FUN-49](./srs.md#srs-fun-49) |
-| IUserRepository, IRefreshTokenRepository, IEmailTokenRepository, IMailSender, ICourseRepository, IAttemptRepository, IReviewStateRepository, IQuestionReadRepository, IQuestionWriteRepository, IAntiCheatEventRepository, IAuditLogRepository, IGenerationJobRepository, ITransactionManager, IFileStorage, IJobQueue | Ports | Інтерфейси сховищ, транзакцій, файлів і черги; IQuestionReadRepository не повертає ознаку правильної відповіді (ISP) | — | [SRS-FUN-14](./srs.md#srs-fun-14), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
+| IUserRepository, IRefreshTokenRepository, IEmailTokenRepository (таблиці email_verification_tokens і password_reset_tokens), IMailSender, ICourseRepository, IAttemptRepository, IReviewStateRepository, IQuestionReadRepository, IQuestionWriteRepository, IAntiCheatEventRepository, IAuditLogRepository, IGenerationJobRepository, ITransactionManager, IFileStorage, IJobQueue | Ports | Інтерфейси сховищ, транзакцій, файлів і черги; IQuestionReadRepository не повертає ознаку правильної відповіді (ISP) | — | [SRS-FUN-14](./srs.md#srs-fun-14), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
 | Pg*Repository, PgTransactionManager | Outbound | Реалізації репозиторіїв і транзакцій на Kysely з драйвером pg; лише параметризовані запити; обмеження UNIQUE (attempt_id, question_id) | Kysely, pg, PostgreSQL 16 | [SRS-FUN-16](./srs.md#srs-fun-16), [SRS-NFR-REL-01](./srs.md#srs-nfr-rel-01) |
 | LocalFileStorage | Outbound | Запис PDF у Docker volume | fs | [SRS-FUN-09](./srs.md#srs-fun-09), [SRS-FUN-10](./srs.md#srs-fun-10) |
-| SmtpMailSender | Outbound | Надсилання листів підтвердження пошти і відновлення доступу через SMTP після фіксації транзакції; посилання містить одноразовий токен | nodemailer, поштовий сервер | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
+| SmtpMailSender | Outbound | Надсилання листів підтвердження пошти і відновлення доступу через SMTP після фіксації транзакції; посилання містить одноразовий токен | nodemailer, SMTP-провайдер | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
+| ConsoleMailSender | Outbound | Реалізація IMailSender для середовищ dev і test: лист з посиланням записується в журнал застосунку замість надсилання; адаптер обирається змінною оточення `MAIL_TRANSPORT` (`smtp` або `console`), у production допускається лише `smtp` | pino | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-55](./srs.md#srs-fun-55) |
 | BullMqJobQueue | Outbound | Постановка задач BullMQ з jobId := idempotency_key, attempts = 3, exponential backoff 5 с, requestId у даних задачі | bullmq, Redis 7 | [SRS-NFR-ASYNC-03](./srs.md#srs-nfr-async-03), [SRS-NFR-REL-02](./srs.md#srs-nfr-rel-02), [SRS-NFR-OBS-01](./srs.md#srs-nfr-obs-01) |
 
 Таблиця 2.8 – Типи зв'язків діаграм компонентів
@@ -631,13 +634,13 @@ flowchart LR
 | attempt_event_type | app_background, app_foreground, screenshot, screen_recording | attempt_events.type |
 | generation_job_type | lecture_test, mock_questions | generation_jobs.type |
 | generation_job_status | queued, processing, done, failed, dead | generation_jobs.status |
-| email_token_purpose | verify_email, reset_password | email_tokens.purpose |
 | audit_action | create, update, approve, reject, delete, upload, publish, role_change, revoke, confirm, password_reset, token_reuse | audit_log.action |
 | audit_entity | course, member, invite_code, topic, control_event, lecture_material, source_test, question, mock_test, mastery, user | audit_log.entity |
 
 ```mermaid
 erDiagram
-    users ||--o{ email_tokens : "має"
+    users ||--o{ email_verification_tokens : "підтверджує пошту"
+    users ||--o{ password_reset_tokens : "відновлює доступ"
     users ||--o{ refresh_tokens : "має"
     refresh_tokens |o--o| refresh_tokens : "replaced_by"
     users ||--o{ course_members : "бере участь"
@@ -684,12 +687,19 @@ erDiagram
         timestamptz updated_at
         timestamptz deleted_at "NULL"
     }
-    email_tokens {
+    email_verification_tokens {
         uuid id PK
         uuid user_id FK
-        email_token_purpose purpose
         bytea token_hash UK "SHA-256, 32 байти"
-        timestamptz expires_at
+        timestamptz expires_at "created_at + 24 год"
+        timestamptz used_at "NULL"
+        timestamptz created_at
+    }
+    password_reset_tokens {
+        uuid id PK
+        uuid user_id FK
+        bytea token_hash UK "SHA-256, 32 байти"
+        timestamptz expires_at "created_at + 30 хв"
         timestamptz used_at "NULL"
         timestamptz created_at
     }
@@ -917,10 +927,12 @@ erDiagram
 | users | display_name | varchar(64) | NOT NULL | Ім'я або псевдонім |
 | users | password_hash | varchar(255) | NOT NULL | Рядок PHC Argon2id з параметрами і сіллю ([SRS-NFR-SEC-03](./srs.md#srs-nfr-sec-03)) |
 | users | deleted_at | timestamptz | NULL | Мітка знеособлення ([SRS-FUN-48](./srs.md#srs-fun-48)) |
-| email_tokens | user_id | uuid | FK → users, CASCADE | Власник токена |
-| email_tokens | purpose | email_token_purpose | NOT NULL | Підтвердження пошти (24 год) або відновлення доступу (30 хв) |
-| email_tokens | token_hash | bytea | NOT NULL, UNIQUE, CHECK (octet_length = 32) | SHA-256 від одноразового токена посилання; сам токен не зберігається ([SRS-FUN-55](./srs.md#srs-fun-55)) |
-| email_tokens | expires_at, used_at | timestamptz | expires_at NOT NULL; used_at NULL | Строк дії і час використання; повторне використання відхиляється |
+| email_verification_tokens | user_id | uuid | FK → users, CASCADE | Власник токена підтвердження пошти ([SRS-FUN-01](./srs.md#srs-fun-01)) |
+| email_verification_tokens | token_hash | bytea | NOT NULL, UNIQUE, CHECK (octet_length = 32) | SHA-256 від одноразового токена посилання; сам токен не зберігається |
+| email_verification_tokens | expires_at, used_at | timestamptz | expires_at = created_at + 24 год; used_at NULL | Строк дії і час використання; повторне використання відхиляється; повторний лист анулює попередні токени користувача |
+| password_reset_tokens | user_id | uuid | FK → users, CASCADE | Власник токена відновлення доступу ([SRS-FUN-55](./srs.md#srs-fun-55)) |
+| password_reset_tokens | token_hash | bytea | NOT NULL, UNIQUE, CHECK (octet_length = 32) | SHA-256 від одноразового токена посилання; сам токен не зберігається |
+| password_reset_tokens | expires_at, used_at | timestamptz | expires_at = created_at + 30 хв; used_at NULL | Одноразовість: used_at встановлюється в транзакції зміни пароля разом з відкликанням усіх refresh-токенів користувача |
 | refresh_tokens | user_id | uuid | FK → users, CASCADE | Власник |
 | refresh_tokens | family_id | uuid | NOT NULL | Сімейство токенів однієї сесії: відкликання при виході ([SRS-FUN-53](./srs.md#srs-fun-53)) і при повторному використанні ([SRS-NFR-SEC-02](./srs.md#srs-nfr-sec-02)) |
 | refresh_tokens | token_hash | bytea | NOT NULL, UNIQUE, CHECK (octet_length = 32) | SHA-256 від refresh-токена |
@@ -993,7 +1005,8 @@ erDiagram
 | Індекс | Таблиця (поля) | Тип | Запит, який прискорює | SRS-ID |
 |---|---|---|---|---|
 | users_email_key | users (email) | UNIQUE | Вхід і перевірка наявної пошти при реєстрації | [SRS-FUN-01](./srs.md#srs-fun-01), [SRS-FUN-02](./srs.md#srs-fun-02) |
-| email_tokens_token_hash_key | email_tokens (token_hash) | UNIQUE | Перевірка посилання підтвердження і відновлення | [SRS-FUN-55](./srs.md#srs-fun-55) |
+| email_verification_tokens_token_hash_key | email_verification_tokens (token_hash) | UNIQUE | Перевірка посилання підтвердження пошти | [SRS-FUN-01](./srs.md#srs-fun-01) |
+| password_reset_tokens_token_hash_key | password_reset_tokens (token_hash) | UNIQUE | Перевірка посилання відновлення доступу | [SRS-FUN-55](./srs.md#srs-fun-55) |
 | refresh_tokens_token_hash_key | refresh_tokens (token_hash) | UNIQUE | Оновлення токена | [SRS-NFR-SEC-02](./srs.md#srs-nfr-sec-02) |
 | refresh_tokens_family_active_idx | refresh_tokens (family_id) WHERE revoked_at IS NULL | Частковий | Відкликання сімейства при виході і повторному використанні | [SRS-FUN-53](./srs.md#srs-fun-53) |
 | course_members_user_idx | course_members (user_id) | — | Курси користувача; PK (course_id, user_id) покриває перевірку ролі | [SRS-NFR-SEC-05](./srs.md#srs-nfr-sec-05) |
