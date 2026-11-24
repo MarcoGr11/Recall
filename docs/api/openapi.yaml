@@ -1,0 +1,4720 @@
+openapi: 3.0.3
+info:
+  title: Recall REST API
+  version: 1.0.0
+  description: Контракт REST API системи Recall (Розділ 2, підрозділ 2.5). Автентифікація — JWT Bearer (access 15 хв, refresh 30 днів з ротацією). Помилки — application/problem+json (RFC 9457). Ідентифікатори в шляху — лише UUID. Пагінація — page і limit (limit ≤ 100). Токени і паролі не передаються в query; одноразові токени з листів передаються у фрагменті посилання (#token=…), який не надсилається на сервер. Ліміт JSON-тіла 100 КБ, файлу 10 МБ. Location повертається лише для ресурсів з операцією GET. Розширення x-srs і x-roles містять трасування до SRS і ролі в курсі для матриці маршрутів.
+  license:
+    name: Proprietary — дипломний проєкт
+    url: https://github.com/MarcoGr11/Recall
+servers:
+  - url: https://{host}/api/v1
+    description: Розгортання за reverse proxy Caddy (TLS 1.2+).
+    variables:
+      host:
+        default: recall.local
+        description: Домен розгортання; у середовищі розробки — localhost:8080 через Caddy.
+security:
+  - bearerAuth: []
+tags:
+  - name: Auth
+    description: Реєстрація, вхід, токени, підтвердження пошти і відновлення пароля.
+  - name: Me
+    description: Профіль і обліковий запис поточного користувача.
+  - name: Courses
+    description: Курси, учасники і коди запрошення.
+  - name: Content
+    description: Теми, контрольні заходи, лекційні матеріали і зразки тестів.
+  - name: Generation
+    description: Асинхронні задачі генерації через Claude API.
+  - name: Moderation
+    description: Модерація чернеток питань.
+  - name: Learning
+    description: План на день, спроби, відповіді і події антисписування.
+  - name: Mock tests
+    description: Пробні тести до контрольних заходів.
+  - name: Monitoring
+    description: Теплова карта і підтвердження засвоєння.
+paths:
+  /auth/register:
+    post:
+      tags:
+        - Auth
+      operationId: registerUser
+      summary: Реєстрація за корпоративною поштою
+      description: "Для нової адреси створює обліковий запис з непідтвердженою поштою і надсилає лист з посиланням підтвердження (строк дії 24 год); пароль хешується Argon2id. Для вже зареєстрованої адреси обліковий запис не змінюється, а на адресу надсилається лист «обліковий запис уже існує» з посиланням на відновлення пароля. Пароль з переліку 100 000 поширених паролів → 422 password-too-common (перевірка до пошуку адреси, тому не розкриває її існування). Відповідь завжди 202, пароль хешується і для наявної адреси, лист надсилається після відповіді: ні код, ні час відповіді не розкривають існування облікового запису (захист від user enumeration, OWASP A07:2021)."
+      x-srs:
+        - SRS-FUN-01
+        - SRS-NFR-SEC-03
+        - SRS-NFR-SEC-08
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+            example:
+              email: o.koval@chnu.edu.ua
+              password: Kv9#plume-river
+              displayName: Олена Коваль
+      responses:
+        "202":
+          description: Запит прийнято; лист надіслано на вказану адресу.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/verify-email:
+    post:
+      tags:
+        - Auth
+      operationId: verifyEmail
+      summary: Підтвердження пошти
+      description: Підтверджує пошту одноразовим токеном з фрагмента посилання в листі (https://{host}/verify-email#token=…); токен анулюється після використання.
+      x-srs:
+        - SRS-FUN-01
+        - SRS-NFR-SEC-08
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailTokenRequest"
+            example:
+              token: Q2xhcmFfUmVjYWxsX0V4YW1wbGVUb2tlbl8xMjM0NTY
+      responses:
+        "204":
+          description: Пошту підтверджено.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/verify-email/resend:
+    post:
+      tags:
+        - Auth
+      operationId: resendVerificationEmail
+      summary: Повторний лист підтвердження
+      description: Надсилає новий лист підтвердження і анулює попередні токени. Відповідь завжди 202 незалежно від існування облікового запису.
+      x-srs:
+        - SRS-FUN-01
+        - SRS-NFR-SEC-08
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailRequest"
+            example:
+              email: o.koval@chnu.edu.ua
+      responses:
+        "202":
+          description: Запит прийнято.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      operationId: login
+      summary: Вхід
+      description: Автентифікує користувача з підтвердженою поштою і видає пару токенів. Невірна пошта і невірний пароль не розрізняються у відповіді; 403 email-not-verified повертається лише після перевірки правильного пароля. Для відсутньої адреси виконується хешування фіктивного пароля, тому час відповіді не розкриває існування облікового запису.
+      x-srs:
+        - SRS-FUN-02
+        - SRS-NFR-SEC-01
+        - SRS-NFR-SEC-08
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+            example:
+              email: o.koval@chnu.edu.ua
+              password: Kv9#plume-river
+      responses:
+        "200":
+          description: Пару токенів видано.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+              example:
+                tokenType: Bearer
+                accessToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMTkwZjNhMiJ9.c2lnbmF0dXJl
+                expiresIn: 900
+                refreshToken: Q2xhcmFfUmVjYWxsX0V4YW1wbGVUb2tlbl8xMjM0NTY
+                refreshExpiresIn: 2592000
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/refresh:
+    post:
+      tags:
+        - Auth
+      operationId: refreshTokens
+      summary: Оновлення токенів
+      description: Видає нову пару токенів і анулює поданий refresh-токен. Повторне використання анульованого токена відкликає всі токени сімейства.
+      x-srs:
+        - SRS-NFR-SEC-02
+        - SRS-NFR-SEC-08
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+            example:
+              refreshToken: Q2xhcmFfUmVjYWxsX0V4YW1wbGVUb2tlbl8xMjM0NTY
+      responses:
+        "200":
+          description: Нову пару токенів видано.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+              example:
+                tokenType: Bearer
+                accessToken: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIwMTkwZjNhMiJ9.c2lnbmF0dXJl
+                expiresIn: 900
+                refreshToken: Q2xhcmFfUmVjYWxsX0V4YW1wbGVUb2tlbl8xMjM0NTY
+                refreshExpiresIn: 2592000
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/logout:
+    post:
+      tags:
+        - Auth
+      operationId: logout
+      summary: Вихід
+      description: "Відкликає всі refresh-токени сімейства поточної сесії. Потребує чинного access-токена: клієнт з простроченим access-токеном спершу виконує POST /auth/refresh."
+      x-srs:
+        - SRS-FUN-53
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+            example:
+              refreshToken: Q2xhcmFfUmVjYWxsX0V4YW1wbGVUb2tlbl8xMjM0NTY
+      responses:
+        "204":
+          description: Сесію завершено.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/password-reset/request:
+    post:
+      tags:
+        - Auth
+      operationId: requestPasswordReset
+      summary: Запит відновлення пароля
+      description: Надсилає на підтверджену пошту одноразове посилання https://{host}/reset-password#token=… (строк дії 30 хв); токен у фрагменті URL не надсилається на сервер. Відповідь завжди 202 незалежно від існування адреси (захист від user enumeration); лист надсилається після відповіді, тому час відповіді не залежить від існування адреси. Новий запит анулює попередні невикористані токени користувача.
+      x-srs:
+        - SRS-FUN-55
+        - SRS-NFR-SEC-08
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailRequest"
+            example:
+              email: o.koval@chnu.edu.ua
+      responses:
+        "202":
+          description: Запит прийнято.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/password-reset/confirm:
+    post:
+      tags:
+        - Auth
+      operationId: confirmPasswordReset
+      summary: Встановлення нового пароля
+      description: Встановлює новий пароль за одноразовим токеном і відкликає всі refresh-токени користувача; пароль з переліку поширених → 422 password-too-common. Уже видані access-токени діють до закінчення строку (до 15 хв).
+      x-srs:
+        - SRS-FUN-55
+        - SRS-NFR-SEC-03
+        - SRS-NFR-SEC-08
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetConfirm"
+            example:
+              token: Q2xhcmFfUmVjYWxsX0V4YW1wbGVUb2tlbl8xMjM0NTY
+              newPassword: Tq4!north-cedar
+      responses:
+        "204":
+          description: Пароль змінено.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /me:
+    get:
+      tags:
+        - Me
+      operationId: getMyProfile
+      summary: Профіль поточного користувача
+      description: Повертає профіль за access-токеном.
+      x-srs:
+        - SRS-FUN-02
+      responses:
+        "200":
+          description: Профіль.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+              example:
+                id: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                email: o.koval@chnu.edu.ua
+                displayName: Олена Коваль
+                emailVerified: true
+                createdAt: "2026-11-24T09:15:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /me/deletion:
+    post:
+      tags:
+        - Me
+      operationId: deleteMyAccount
+      summary: Видалення облікового запису
+      description: Після повторної автентифікації поточним паролем знеособлює обліковий запис (deleted_at, email і display_name), відкликає токени; відповіді зберігаються знеособленими для агрегатів курсу. Невірний пароль → 403 reauthentication-failed. Власник курсу спершу видаляє свої курси, інакше 409 owner-has-courses. Операція оформлена як POST до підресурсу, оскільки OpenAPI 3.0.3 не визначає тіла запиту для DELETE.
+      x-srs:
+        - SRS-FUN-48
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccountDeletion"
+            example:
+              password: Kv9#plume-river
+      responses:
+        "204":
+          description: Обліковий запис видалено.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /me/daily-plan:
+    get:
+      tags:
+        - Learning
+      operationId: getDailyPlan
+      summary: План на день
+      description: |-
+        Повертає попередній перегляд плану з тем-кандидатів усіх курсів, де користувач має роль student (перевіряє PlanController через AccessPolicyService; жодного такого курсу → 403): ліміт 30 питань, 2…8 на тему пропорційно пріоритету P, не більше 15 тем. Питання видаються під час POST /attempts у режимі daily_plan за планом, сформованим повторно.
+
+        Ролі: student.
+      x-srs:
+        - SRS-FUN-20
+        - SRS-FUN-21
+        - SRS-FUN-50
+      x-roles:
+        - student
+      responses:
+        "200":
+          description: План на сьогодні.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyPlan"
+              example:
+                date: "2026-11-24"
+                totalQuestions: 8
+                topics:
+                  - courseId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                    topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                    topicTitle: Нормалізація баз даних
+                    priority: 5
+                    overdueDays: 3
+                    daysToEvent: 5
+                    questionCount: 5
+                    nextReview: "2026-11-21"
+                  - courseId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                    topicId: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                    topicTitle: Індекси B-Tree
+                    priority: 2
+                    overdueDays: 0
+                    daysToEvent: 5
+                    questionCount: 3
+                    nextReview: "2026-11-24"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /me/memberships:
+    post:
+      tags:
+        - Courses
+      operationId: joinCourse
+      summary: Приєднання до курсу за кодом
+      description: Приєднує користувача до курсу з роллю коду запрошення, якщо код існує, не відкликаний і чинний.
+      x-srs:
+        - SRS-FUN-05
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MembershipCreate"
+            example:
+              code: K7M2Q9XA
+      responses:
+        "201":
+          description: Користувача додано до курсу.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Membership"
+              example:
+                courseId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                courseTitle: Бази даних
+                role: student
+                joinedAt: "2026-11-24T09:20:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses:
+    get:
+      tags:
+        - Courses
+      operationId: listMyCourses
+      summary: Курси користувача
+      description: Повертає курси, в яких користувач має роль.
+      x-srs:
+        - SRS-FUN-03
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Сторінка курсів.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CoursePage"
+              example:
+                items:
+                  - id: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                    title: Бази даних
+                    myRole: owner
+                    createdAt: "2026-11-24T09:30:00Z"
+                page: 1
+                limit: 20
+                total: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - Courses
+      operationId: createCourse
+      summary: Створення курсу
+      description: Створює курс з упорядкованим переліком тем; автор отримує роль owner.
+      x-srs:
+        - SRS-FUN-03
+        - SRS-FUN-07
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CourseCreate"
+            example:
+              title: Бази даних
+              topics:
+                - title: Нормалізація баз даних
+                - title: Індекси B-Tree
+      responses:
+        "201":
+          description: Курс створено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Course"
+              example:
+                id: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                title: Бази даних
+                myRole: owner
+                createdAt: "2026-11-24T09:30:00Z"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}:
+    get:
+      tags:
+        - Courses
+      operationId: getCourse
+      summary: Курс
+      description: |-
+        Повертає курс за ідентифікатором.
+
+        Ролі: owner, co_instructor, student.
+      x-srs:
+        - SRS-NFR-SEC-05
+      x-roles:
+        - owner
+        - co_instructor
+        - student
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+      responses:
+        "200":
+          description: Курс.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Course"
+              example:
+                id: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                title: Бази даних
+                myRole: owner
+                createdAt: "2026-11-24T09:30:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    patch:
+      tags:
+        - Courses
+      operationId: updateCourse
+      summary: Зміна назви курсу
+      description: |-
+        Змінює назву курсу.
+
+        Ролі: owner.
+      x-srs:
+        - SRS-FUN-07
+      x-roles:
+        - owner
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CourseUpdate"
+            example:
+              title: Бази даних і SQL
+      responses:
+        "200":
+          description: Курс оновлено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Course"
+              example:
+                id: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                title: Бази даних і SQL
+                myRole: owner
+                createdAt: "2026-11-24T09:30:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    delete:
+      tags:
+        - Courses
+      operationId: deleteCourse
+      summary: Видалення курсу
+      description: |-
+        Позначає курс видаленим (deleted_at). Запит co_instructor → 403.
+
+        Ролі: owner.
+      x-srs:
+        - SRS-FUN-06
+        - SRS-FUN-12
+      x-roles:
+        - owner
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+      responses:
+        "204":
+          description: Курс видалено.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/members:
+    get:
+      tags:
+        - Courses
+      operationId: listMembers
+      summary: Учасники курсу
+      description: |-
+        Повертає учасників курсу з ролями.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-03
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Сторінка учасників.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MemberPage"
+              example:
+                items:
+                  - userId: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                    displayName: Олена Коваль
+                    role: student
+                    joinedAt: "2026-11-24T09:20:00Z"
+                page: 1
+                limit: 20
+                total: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/members/{userId}:
+    delete:
+      tags:
+        - Courses
+      operationId: removeMember
+      summary: Виключення учасника
+      description: |-
+        Виключає учасника з курсу; роль owner не знімається.
+
+        Ролі: owner.
+      x-srs:
+        - SRS-FUN-06
+        - SRS-FUN-12
+      x-roles:
+        - owner
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "204":
+          description: Учасника виключено.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/invite-codes:
+    get:
+      tags:
+        - Courses
+      operationId: listInviteCodes
+      summary: Коди запрошення
+      description: |-
+        Повертає коди запрошення курсу.
+
+        Ролі: owner.
+      x-srs:
+        - SRS-FUN-04
+      x-roles:
+        - owner
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Сторінка кодів.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InviteCodePage"
+              example:
+                items:
+                  - id: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                    code: K7M2Q9XA
+                    role: student
+                    expiresAt: "2026-12-01T09:40:00Z"
+                    revokedAt: null
+                    createdAt: "2026-11-24T09:40:00Z"
+                page: 1
+                limit: 20
+                total: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - Courses
+      operationId: createInviteCode
+      summary: Створення коду запрошення
+      description: |-
+        Створює код з роллю co_instructor або student і строком дії (за замовчуванням 7 днів).
+
+        Ролі: owner.
+      x-srs:
+        - SRS-FUN-04
+      x-roles:
+        - owner
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InviteCodeCreate"
+            example:
+              role: student
+              expiresInDays: 7
+      responses:
+        "201":
+          description: Код створено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InviteCode"
+              example:
+                id: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                code: K7M2Q9XA
+                role: student
+                expiresAt: "2026-12-01T09:40:00Z"
+                revokedAt: null
+                createdAt: "2026-11-24T09:40:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/invite-codes/{inviteCodeId}:
+    delete:
+      tags:
+        - Courses
+      operationId: revokeInviteCode
+      summary: Відкликання коду запрошення
+      description: |-
+        Встановлює revoked_at; запис зберігається для журналу.
+
+        Ролі: owner.
+      x-srs:
+        - SRS-FUN-04
+        - SRS-FUN-12
+      x-roles:
+        - owner
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/InviteCodeId"
+      responses:
+        "204":
+          description: Код відкликано.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/topics:
+    get:
+      tags:
+        - Content
+      operationId: listTopics
+      summary: Теми курсу
+      description: |-
+        Повертає впорядкований перелік тем.
+
+        Ролі: owner, co_instructor, student.
+      x-srs:
+        - SRS-FUN-07
+      x-roles:
+        - owner
+        - co_instructor
+        - student
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+      responses:
+        "200":
+          description: Теми.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopicList"
+              example:
+                items:
+                  - id: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                    title: Нормалізація баз даних
+                    position: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - Content
+      operationId: createTopic
+      summary: Додавання теми
+      description: |-
+        Додає тему до курсу.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-07
+        - SRS-FUN-12
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TopicCreate"
+            example:
+              title: Транзакції та ACID
+      responses:
+        "201":
+          description: Тему створено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Topic"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                title: Транзакції та ACID
+                position: 3
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/topics/{topicId}:
+    patch:
+      tags:
+        - Content
+      operationId: updateTopic
+      summary: Зміна теми
+      description: |-
+        Змінює назву або позицію теми.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-07
+        - SRS-FUN-12
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/TopicId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TopicUpdate"
+            example:
+              position: 2
+      responses:
+        "200":
+          description: Тему оновлено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Topic"
+              example:
+                id: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                title: Нормалізація баз даних
+                position: 2
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/control-events:
+    get:
+      tags:
+        - Content
+      operationId: listControlEvents
+      summary: Контрольні заходи
+      description: |-
+        Повертає контрольні заходи курсу.
+
+        Ролі: owner, co_instructor, student.
+      x-srs:
+        - SRS-FUN-08
+      x-roles:
+        - owner
+        - co_instructor
+        - student
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Сторінка заходів.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlEventPage"
+              example:
+                items:
+                  - id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                    type: module
+                    eventDate: "2026-11-29"
+                    topicIds:
+                      - 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                page: 1
+                limit: 20
+                total: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - Content
+      operationId: createControlEvent
+      summary: Створення контрольного заходу
+      description: |-
+        Створює захід з датою і темами цього курсу; тема іншого курсу → 422.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-08
+        - SRS-FUN-12
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ControlEventCreate"
+            example:
+              type: module
+              eventDate: "2026-11-29"
+              topicIds:
+                - 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+      responses:
+        "201":
+          description: Захід створено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlEvent"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                type: module
+                eventDate: "2026-11-29"
+                topicIds:
+                  - 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/control-events/{controlEventId}:
+    patch:
+      tags:
+        - Content
+      operationId: updateControlEvent
+      summary: Зміна контрольного заходу
+      description: |-
+        Змінює тип, дату або теми заходу.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-08
+        - SRS-FUN-12
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/ControlEventId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ControlEventUpdate"
+            example:
+              eventDate: "2026-12-01"
+      responses:
+        "200":
+          description: Захід оновлено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ControlEvent"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                type: module
+                eventDate: "2026-12-01"
+                topicIds:
+                  - 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/lecture-materials:
+    get:
+      tags:
+        - Content
+      operationId: listLectureMaterials
+      summary: Лекційні матеріали
+      description: |-
+        Повертає метадані лекційних матеріалів курсу.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-09
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Сторінка матеріалів.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LectureMaterialPage"
+              example:
+                items:
+                  - id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                    topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                    fileName: lecture-05-normalization.pdf
+                    sizeBytes: 2457600
+                    pageCount: 18
+                    textTokens: 9400
+                    uploadedAt: "2026-11-24T10:00:00Z"
+                page: 1
+                limit: 20
+                total: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/topics/{topicId}/lecture-materials:
+    post:
+      tags:
+        - Content
+      operationId: uploadLectureMaterial
+      summary: Завантаження лекції PDF
+      description: |-
+        Приймає PDF, перевіряє розмір, тип, сигнатуру, текстовий шар і обсяг до збереження. Тема іншого курсу → 404.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-09
+        - SRS-FUN-51
+        - SRS-NFR-SEC-07
+        - SRS-FUN-12
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/TopicId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/LectureMaterialUpload"
+            encoding:
+              file:
+                contentType: application/pdf
+      responses:
+        "201":
+          description: Матеріал збережено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LectureMaterial"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                fileName: lecture-05-normalization.pdf
+                sizeBytes: 2457600
+                pageCount: 18
+                textTokens: 9400
+                uploadedAt: "2026-11-24T10:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/source-tests:
+    get:
+      tags:
+        - Content
+      operationId: listSourceTests
+      summary: Зразки тестів
+      description: |-
+        Повертає метадані зразків без вмісту файлу.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-10
+        - SRS-FUN-11
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Сторінка зразків.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceTestPage"
+              example:
+                items:
+                  - id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                    controlEventId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                    timeLimitMinutes: 40
+                    pageCount: 6
+                    structure:
+                      - topicId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                        questionType: single
+                        questionCount: 5
+                    uploadedAt: "2026-11-24T10:10:00Z"
+                page: 1
+                limit: 20
+                total: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/control-events/{controlEventId}/source-tests:
+    post:
+      tags:
+        - Content
+      operationId: uploadSourceTest
+      summary: Завантаження зразка тесту
+      description: |-
+        Приймає закритий зразок тесту PDF зі структурою «тема × тип → кількість» і лімітом часу. Контрольний захід або тема структури іншого курсу → 404.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-10
+        - SRS-FUN-34
+        - SRS-FUN-51
+        - SRS-NFR-SEC-07
+        - SRS-FUN-12
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/ControlEventId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/SourceTestUpload"
+            encoding:
+              file:
+                contentType: application/pdf
+              structure:
+                contentType: application/json
+      responses:
+        "201":
+          description: Зразок збережено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourceTest"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                controlEventId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                timeLimitMinutes: 40
+                pageCount: 6
+                structure:
+                  - topicId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                    questionType: single
+                    questionCount: 5
+                uploadedAt: "2026-11-24T10:10:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/generation-jobs:
+    post:
+      tags:
+        - Generation
+      operationId: createGenerationJob
+      summary: Постановка задачі генерації
+      description: |-
+        Записує GenerationJob (id — UUID, на нього вказує Location) і ставить задачу в чергу BullMQ з ідентифікатором задачі черги, що дорівнює серверному idempotency_key (SHA-256), і повертає 202 без очікування Claude API. Наявна незавершена задача з тим самим idempotency_key повертається без створення нової. lectureMaterialId або sourceTestId іншого курсу → 404.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-22
+        - SRS-NFR-ASYNC-01
+        - SRS-NFR-REL-02
+        - SRS-NFR-COST-02
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GenerationJobCreate"
+            example:
+              type: lecture_test
+              lectureMaterialId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+      responses:
+        "202":
+          description: Задачу прийнято.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenerationJob"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                courseId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                type: lecture_test
+                status: queued
+                generationNo: 1
+                attemptsMade: 0
+                error: null
+                draftsCount: 0
+                createdAt: "2026-11-24T10:20:00Z"
+                startedAt: null
+                finishedAt: null
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/generation-jobs/{jobId}:
+    get:
+      tags:
+        - Generation
+      operationId: getGenerationJob
+      summary: Стан задачі генерації
+      description: |-
+        Повертає статус, кількість спроб, причину збою і кількість чернеток.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-52
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Стан задачі.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GenerationJob"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                courseId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                type: lecture_test
+                status: done
+                generationNo: 1
+                attemptsMade: 1
+                error: null
+                draftsCount: 10
+                createdAt: "2026-11-24T10:20:00Z"
+                startedAt: "2026-11-24T10:20:02Z"
+                finishedAt: "2026-11-24T10:20:41Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/questions:
+    get:
+      tags:
+        - Moderation
+      operationId: listQuestions
+      summary: Питання курсу
+      description: |-
+        Повертає питання з фільтрами за статусом, темою і задачею генерації; за замовчуванням — чернетки.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-28
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+        - name: status
+          in: query
+          required: false
+          description: Фільтр за статусом.
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/QuestionStatus"
+            default: draft
+        - name: topicId
+          in: query
+          required: false
+          description: Фільтр за темою.
+          schema:
+            type: string
+            format: uuid
+        - name: generationJobId
+          in: query
+          required: false
+          description: "Фільтр за задачею генерації: чернетки однієї задачі."
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Сторінка питань.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuestionPage"
+              example:
+                items:
+                  - id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                    topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                    type: single
+                    status: draft
+                    source: lecture
+                    stem: Яка нормальна форма усуває транзитивні залежності неключових атрибутів?
+                    explanation: 3НФ вимагає відсутності транзитивних залежностей від ключа.
+                    options:
+                      - id: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                        text: 2НФ
+                        isCorrect: false
+                        position: 1
+                      - id: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                        text: 3НФ
+                        isCorrect: true
+                        position: 2
+                    version: 1
+                    generationJobId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                    rejectReason: null
+                    createdAt: "2026-11-24T10:20:41Z"
+                page: 1
+                limit: 20
+                total: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/questions/{questionId}:
+    patch:
+      tags:
+        - Moderation
+      operationId: updateQuestion
+      summary: Редагування чернетки
+      description: |-
+        Редагує чернетку з перевіркою версії (оптимістичне блокування).
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-28
+        - SRS-FUN-12
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/QuestionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuestionUpdate"
+            example:
+              version: 1
+              stem: Яка нормальна форма усуває транзитивні залежності?
+      responses:
+        "200":
+          description: Питання оновлено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Question"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                type: single
+                status: draft
+                source: lecture
+                stem: Яка нормальна форма усуває транзитивні залежності?
+                explanation: 3НФ вимагає відсутності транзитивних залежностей від ключа.
+                options:
+                  - id: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                    text: 2НФ
+                    isCorrect: false
+                    position: 1
+                  - id: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                    text: 3НФ
+                    isCorrect: true
+                    position: 2
+                version: 2
+                generationJobId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                rejectReason: null
+                createdAt: "2026-11-24T10:20:41Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/questions/{questionId}/approval:
+    post:
+      tags:
+        - Moderation
+      operationId: approveQuestion
+      summary: Схвалення питання
+      description: |-
+        Переводить чернетку в approved з фіксацією approved_by і approved_at.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-28
+        - SRS-FUN-29
+        - SRS-FUN-12
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/QuestionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuestionApproval"
+            example:
+              version: 1
+      responses:
+        "200":
+          description: Питання схвалено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Question"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                type: single
+                status: approved
+                source: lecture
+                stem: Яка нормальна форма усуває транзитивні залежності неключових атрибутів?
+                explanation: 3НФ вимагає відсутності транзитивних залежностей від ключа.
+                options:
+                  - id: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                    text: 2НФ
+                    isCorrect: false
+                    position: 1
+                  - id: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                    text: 3НФ
+                    isCorrect: true
+                    position: 2
+                version: 2
+                generationJobId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                rejectReason: null
+                createdAt: "2026-11-24T10:20:41Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/questions/{questionId}/rejection:
+    post:
+      tags:
+        - Moderation
+      operationId: rejectQuestion
+      summary: Відхилення питання
+      description: |-
+        Переводить чернетку в rejected із причиною.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-28
+        - SRS-FUN-12
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/QuestionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QuestionRejection"
+            example:
+              version: 1
+              reason: Дистрактор 2НФ не відповідає темі лекції.
+      responses:
+        "200":
+          description: Питання відхилено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Question"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                type: single
+                status: rejected
+                source: lecture
+                stem: Яка нормальна форма усуває транзитивні залежності неключових атрибутів?
+                explanation: 3НФ вимагає відсутності транзитивних залежностей від ключа.
+                options:
+                  - id: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                    text: 2НФ
+                    isCorrect: false
+                    position: 1
+                  - id: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                    text: 3НФ
+                    isCorrect: true
+                    position: 2
+                version: 2
+                generationJobId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                rejectReason: Дистрактор 2НФ не відповідає темі лекції.
+                createdAt: "2026-11-24T10:20:41Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /attempts:
+    post:
+      tags:
+        - Learning
+      operationId: startAttempt
+      summary: Початок спроби
+      description: |-
+        Створює спробу в режимі daily_plan, practice або mock_test і видає питання без ознаки правильності з рандомізованим порядком. deadlineAt := startedAt + ліміт часу зразка (mock_test) або startedAt + min(2 хв × кількість питань, 60 хв) (daily_plan, practice). У режимі daily_plan план формується повторно на момент запиту. Наявна незавершена спроба того самого режиму з чинним лімітом часу → 409 attempt-in-progress з членом-розширенням attemptId; прострочена спроба попередньо завершується зі статусом expired; одночасні запити впорядковує унікальний частковий індекс attempts (user_id, mode) WHERE status = 'in_progress'. План daily_plan без тем або схвалених питань → 422 plan-empty. Роль перевіряє AttemptService: student у courseId з тіла (practice, mock_test) або хоча б в одному курсі (daily_plan), інакше 403; topicId або controlEventId іншого курсу → 404.
+
+        Ролі: student.
+      x-srs:
+        - SRS-FUN-13
+        - SRS-FUN-14
+        - SRS-FUN-15
+        - SRS-FUN-21
+        - SRS-FUN-34
+        - SRS-FUN-36
+        - SRS-FUN-50
+      x-roles:
+        - student
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttemptCreate"
+            example:
+              mode: daily_plan
+      responses:
+        "201":
+          description: Спробу створено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Attempt"
+              example:
+                id: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                mode: daily_plan
+                status: in_progress
+                courseId: null
+                controlEventId: null
+                startedAt: "2026-11-24T11:00:00Z"
+                deadlineAt: "2026-11-24T11:30:00Z"
+                finishedAt: null
+                questions:
+                  - questionId: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                    topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                    position: 1
+                    type: single
+                    stem: Яка нормальна форма усуває транзитивні залежності неключових атрибутів?
+                    options:
+                      - id: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                        text: 3НФ
+                      - id: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                        text: 2НФ
+                answers: []
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /attempts/{attemptId}:
+    get:
+      tags:
+        - Learning
+      operationId: getAttempt
+      summary: Спроба
+      description: |-
+        Повертає власну спробу з питаннями, зафіксованими відповідями і результатом після завершення. Спроба іншого користувача → 404; після виключення студента з курсу спроба цього курсу → 404.
+
+        Ролі: student.
+      x-srs:
+        - SRS-FUN-54
+        - SRS-FUN-14
+      x-roles:
+        - student
+      parameters:
+        - $ref: "#/components/parameters/AttemptId"
+      responses:
+        "200":
+          description: Спроба.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Attempt"
+              example:
+                id: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                mode: daily_plan
+                status: in_progress
+                courseId: null
+                controlEventId: null
+                startedAt: "2026-11-24T11:00:00Z"
+                deadlineAt: "2026-11-24T11:30:00Z"
+                finishedAt: null
+                questions:
+                  - questionId: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                    topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                    position: 1
+                    type: single
+                    stem: Яка нормальна форма усуває транзитивні залежності неключових атрибутів?
+                    options:
+                      - id: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                        text: 3НФ
+                      - id: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                        text: 2НФ
+                answers: []
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /attempts/{attemptId}/answers:
+    post:
+      tags:
+        - Learning
+      operationId: submitAnswer
+      summary: Фіксація відповіді
+      description: |-
+        Фіксує відповідь ідемпотентно за (attemptId, questionId): повторне надсилання замінює обрані варіанти без нового запису. Питання не з цієї спроби → 404. Публікує подію прогресу після COMMIT у кімнату course:{courseId} курсу, до якого належить питання (для daily_plan — курс питання, оскільки courseId спроби дорівнює null).
+
+        Ролі: student.
+      x-srs:
+        - SRS-FUN-15
+        - SRS-FUN-16
+        - SRS-FUN-43
+        - SRS-NFR-PERF-02
+      x-roles:
+        - student
+      parameters:
+        - $ref: "#/components/parameters/AttemptId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnswerSubmit"
+            example:
+              questionId: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+              optionIds:
+                - 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+      responses:
+        "200":
+          description: Відповідь зафіксовано.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnswerAccepted"
+              example:
+                questionId: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                optionIds:
+                  - 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                answeredAt: "2026-11-24T11:02:10Z"
+                answeredCount: 1
+                totalQuestions: 8
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /attempts/{attemptId}/completion:
+    post:
+      tags:
+        - Learning
+      operationId: finishAttempt
+      summary: Завершення спроби
+      description: |-
+        Завершує спробу, обчислює q для кожної теми і один раз оновлює ReviewState (SM-2) в одній ACID-транзакції. Повторний запит повертає збережений результат.
+
+        Ролі: student.
+      x-srs:
+        - SRS-FUN-17
+        - SRS-FUN-19
+        - SRS-NFR-REL-01
+        - SRS-NFR-PERF-02
+      x-roles:
+        - student
+      parameters:
+        - $ref: "#/components/parameters/AttemptId"
+      responses:
+        "200":
+          description: Результат спроби.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttemptResult"
+              example:
+                correctCount: 6
+                totalQuestions: 8
+                topics:
+                  - topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                    correct: 4
+                    total: 5
+                    quality: 4
+                    ef: 2.5
+                    intervalDays: 6
+                    repetitions: 2
+                    nextReview: "2026-11-30"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /attempts/{attemptId}/events:
+    post:
+      tags:
+        - Learning
+      operationId: recordAttemptEvents
+      summary: Події антисписування
+      description: |-
+        Приймає пакет буферизованих подій; повторна доставка за clientEventId не створює записів.
+
+        Ролі: student.
+      x-srs:
+        - SRS-FUN-37
+        - SRS-FUN-38
+        - SRS-FUN-39
+        - SRS-FUN-41
+      x-roles:
+        - student
+      parameters:
+        - $ref: "#/components/parameters/AttemptId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AttemptEventBatch"
+            example:
+              events:
+                - clientEventId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                  type: app_background
+                  occurredAt: "2026-11-24T11:05:00Z"
+                  durationMs: 12000
+      responses:
+        "200":
+          description: Події прийнято.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AttemptEventBatchResult"
+              example:
+                accepted: 1
+                duplicates: 0
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/mock-tests:
+    get:
+      tags:
+        - Mock tests
+      operationId: listMockTests
+      summary: Опубліковані пробні тести
+      description: |-
+        Повертає пробні тести курсу без вмісту зразка.
+
+        Ролі: owner, co_instructor, student.
+      x-srs:
+        - SRS-FUN-34
+        - SRS-FUN-11
+      x-roles:
+        - owner
+        - co_instructor
+        - student
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Сторінка пробних тестів.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MockTestPage"
+              example:
+                items:
+                  - id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                    controlEventId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                    controlEventType: module
+                    eventDate: "2026-11-29"
+                    timeLimitMinutes: 40
+                    questionCount: 20
+                    publishedAt: "2026-11-24T12:00:00Z"
+                page: 1
+                limit: 20
+                total: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/control-events/{controlEventId}/mock-test:
+    put:
+      tags:
+        - Mock tests
+      operationId: publishMockTest
+      summary: Публікація пробного тесту
+      description: |-
+        Публікує пробний тест до заходу за зразком цього заходу (sourceTestId іншого заходу або курсу → 404), якщо схвалених питань кожної комбінації «тема × тип» не менше подвоєної кількості у структурі зразка; інакше 422.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-35
+        - SRS-FUN-12
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/ControlEventId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MockTestPublish"
+            example:
+              sourceTestId: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+      responses:
+        "200":
+          description: Пробний тест оновлено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MockTest"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                controlEventId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                controlEventType: module
+                eventDate: "2026-11-29"
+                timeLimitMinutes: 40
+                questionCount: 20
+                publishedAt: "2026-11-24T12:00:00Z"
+        "201":
+          description: Пробний тест опубліковано.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MockTest"
+              example:
+                id: 0190f3a2-af4b-708d-ae5c-6f8a9b0c1d24
+                controlEventId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                controlEventType: module
+                eventDate: "2026-11-29"
+                timeLimitMinutes: 40
+                questionCount: 20
+                publishedAt: "2026-11-24T12:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/heatmap:
+    get:
+      tags:
+        - Monitoring
+      operationId: getHeatmap
+      summary: Теплова карта засвоєння
+      description: |-
+        Повертає засвоєння «студент × тема» з пагінацією за студентами.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-46
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Теплова карта.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Heatmap"
+              example:
+                topics:
+                  - id: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                    title: Нормалізація баз даних
+                    position: 1
+                items:
+                  - userId: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                    displayName: Олена Коваль
+                    cells:
+                      - topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                        mastery: 0.8
+                        answered: 15
+                        confirmed: false
+                page: 1
+                limit: 20
+                total: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /courses/{courseId}/members/{userId}/mastery-confirmations/{topicId}:
+    put:
+      tags:
+        - Monitoring
+      operationId: confirmMastery
+      summary: Підтвердження засвоєння теми
+      description: |-
+        Фіксує підтвердження засвоєння теми студентом з confirmed_by і часом; повторний запит не змінює запис. Користувач, що не є студентом курсу, або тема іншого курсу → 404.
+
+        Ролі: owner, co_instructor.
+      x-srs:
+        - SRS-FUN-47
+        - SRS-FUN-12
+      x-roles:
+        - owner
+        - co_instructor
+      parameters:
+        - $ref: "#/components/parameters/CourseId"
+        - $ref: "#/components/parameters/UserId"
+        - $ref: "#/components/parameters/TopicId"
+      responses:
+        "200":
+          description: Підтвердження вже існує.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MasteryConfirmation"
+              example:
+                userId: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                confirmedBy: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                confirmedAt: "2026-11-24T13:00:00Z"
+        "201":
+          description: Підтвердження створено.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MasteryConfirmation"
+              example:
+                userId: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                topicId: 0190f3a2-9e3a-7f6c-9d4b-5e7f8a9b0c13
+                confirmedBy: 0190f3a2-8d2f-7e5b-8c3a-4d6e7f8a9b02
+                confirmedAt: "2026-11-24T13:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Access-токен у заголовку Authorization: Bearer <JWT>."
+  headers:
+    Location:
+      description: URI створеного ресурсу або задачі; повертається лише для ресурсів з операцією GET.
+      schema:
+        type: string
+        format: uri-reference
+        maxLength: 500
+    RetryAfter:
+      description: Кількість секунд до повторного запиту.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 86400
+  parameters:
+    CourseId:
+      name: courseId
+      in: path
+      required: true
+      description: Ідентифікатор курсу.
+      schema:
+        type: string
+        format: uuid
+    TopicId:
+      name: topicId
+      in: path
+      required: true
+      description: Ідентифікатор теми курсу.
+      schema:
+        type: string
+        format: uuid
+    ControlEventId:
+      name: controlEventId
+      in: path
+      required: true
+      description: Ідентифікатор контрольного заходу.
+      schema:
+        type: string
+        format: uuid
+    UserId:
+      name: userId
+      in: path
+      required: true
+      description: Ідентифікатор користувача-учасника курсу.
+      schema:
+        type: string
+        format: uuid
+    InviteCodeId:
+      name: inviteCodeId
+      in: path
+      required: true
+      description: Ідентифікатор коду запрошення.
+      schema:
+        type: string
+        format: uuid
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      description: Ідентифікатор задачі генерації.
+      schema:
+        type: string
+        format: uuid
+    QuestionId:
+      name: questionId
+      in: path
+      required: true
+      description: Ідентифікатор питання.
+      schema:
+        type: string
+        format: uuid
+    AttemptId:
+      name: attemptId
+      in: path
+      required: true
+      description: Ідентифікатор спроби.
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      required: false
+      description: Номер сторінки, з 1; не більше 100, тому глибина вибірки обмежена 10 000 записів.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 1
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Кількість елементів на сторінці.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Ключ ідемпотентності клієнта (UUID), зберігається в Redis 24 год. Повтор із тим самим ключем і тілом повертає ту саму задачу; той самий ключ з іншим тілом → 422.
+      schema:
+        type: string
+        format: uuid
+  responses:
+    BadRequest:
+      description: "Невалідний запит: схема тіла, параметри або одноразовий токен."
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            validation:
+              summary: Помилка валідації полів
+              value:
+                type: /problems/validation-error
+                title: Запит не відповідає схемі
+                status: 400
+                detail: Поле password коротше за 10 символів.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+                errors:
+                  - pointer: /password
+                    detail: Мінімальна довжина — 10 символів.
+            invalidToken:
+              summary: Токен з листа прострочений або використаний
+              value:
+                type: /problems/invalid-token
+                title: Недійсний одноразовий токен
+                status: 400
+                detail: Строк дії посилання минув або його вже використано.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+    Unauthorized:
+      description: Відсутній, прострочений або відкликаний токен; невірні облікові дані.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            tokenExpired:
+              summary: Access-токен прострочено
+              value:
+                type: /problems/unauthorized
+                title: Потрібна автентифікація
+                status: 401
+                detail: Строк дії access-токена минув.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            invalidCredentials:
+              summary: Невірна пошта або пароль
+              value:
+                type: /problems/invalid-credentials
+                title: Невірні облікові дані
+                status: 401
+                detail: Невірна пошта або пароль.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            refreshReuse:
+              summary: Повторне використання refresh-токена
+              value:
+                type: /problems/refresh-token-reused
+                title: Сесію відкликано
+                status: 401
+                detail: Повторне використання анульованого refresh-токена; усі токени сесії відкликано.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+    Forbidden:
+      description: "Недостатньо прав: роль у курсі не дозволяє дію, ресурс іншого курсу, пошту не підтверджено або пароль повторної автентифікації невірний."
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            role:
+              summary: Роль не дозволяє дію
+              value:
+                type: /problems/forbidden
+                title: Доступ заборонено
+                status: 403
+                detail: Роль co_instructor не дозволяє видалити курс.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            emailNotVerified:
+              summary: Пошту не підтверджено
+              value:
+                type: /problems/email-not-verified
+                title: Пошту не підтверджено
+                status: 403
+                detail: Вхід можливий після підтвердження пошти за посиланням з листа.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            reauthFailed:
+              summary: Невірний пароль підтвердження
+              value:
+                type: /problems/reauthentication-failed
+                title: Повторна автентифікація не пройдена
+                status: 403
+                detail: Пароль не збігається з поточним; обліковий запис не видалено.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+    NotFound:
+      description: Ресурс не існує або належить іншому користувачу того самого курсу (BOLA, SRS-FUN-54).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            notFound:
+              summary: Ресурс не знайдено
+              value:
+                type: /problems/not-found
+                title: Ресурс не знайдено
+                status: 404
+                detail: Спробу не знайдено.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+    Conflict:
+      description: Конфлікт зі станом ресурсу.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            ownerHasCourses:
+              summary: Власник має курси
+              value:
+                type: /problems/owner-has-courses
+                title: Користувач є власником курсів
+                status: 409
+                detail: Перед видаленням облікового запису видаліть курси, власником яких ви є.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            versionConflict:
+              summary: Конфлікт версії
+              value:
+                type: /problems/version-conflict
+                title: Конфлікт версії
+                status: 409
+                detail: Питання змінено іншим модератором; актуальна версія 3.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            attemptFinished:
+              summary: Спробу завершено
+              value:
+                type: /problems/attempt-finished
+                title: Спробу завершено
+                status: 409
+                detail: Відповіді до завершеної спроби не приймаються.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            alreadyMember:
+              summary: Користувач уже в курсі
+              value:
+                type: /problems/already-member
+                title: Користувач уже є учасником курсу
+                status: 409
+                detail: Повторне приєднання до курсу не виконується.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            attemptInProgress:
+              summary: Незавершена спроба
+              value:
+                type: /problems/attempt-in-progress
+                title: Є незавершена спроба
+                status: 409
+                detail: Спроба цього режиму ще триває; її можна продовжити.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+                attemptId: 0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+            idempotencyInProgress:
+              summary: Запит з ключем ще обробляється
+              value:
+                type: /problems/idempotency-key-in-progress
+                title: Запит обробляється
+                status: 409
+                detail: Запит з цим Idempotency-Key ще виконується.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+    PayloadTooLarge:
+      description: "Тіло запиту перевищує ліміт: JSON понад 100 КБ або файл понад 10 МБ (SRS-NFR-SEC-07)."
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            tooLarge:
+              summary: Файл завеликий
+              value:
+                type: /problems/payload-too-large
+                title: Тіло запиту завелике
+                status: 413
+                detail: Розмір файлу 12 582 912 байт перевищує 10 485 760 байт.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            jsonTooLarge:
+              summary: JSON-тіло завелике
+              value:
+                type: /problems/payload-too-large
+                title: Тіло запиту завелике
+                status: 413
+                detail: JSON-тіло перевищує 102 400 байт.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+    UnsupportedMediaType:
+      description: Content-Type не відповідає операції (application/json або multipart/form-data) або файл не є PDF за MIME-типом чи сигнатурою %PDF.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            notPdf:
+              summary: Не PDF
+              value:
+                type: /problems/unsupported-media-type
+                title: Непідтримуваний тип вмісту
+                status: 415
+                detail: Очікується application/pdf із сигнатурою %PDF.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            contentType:
+              summary: Невідповідний Content-Type
+              value:
+                type: /problems/unsupported-media-type
+                title: Непідтримуваний тип вмісту
+                status: 415
+                detail: "Очікується Content-Type: application/json."
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+    UnprocessableEntity:
+      description: Запит валідний за схемою, але порушує бізнес-правило.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            domain:
+              summary: Недозволений домен пошти
+              value:
+                type: /problems/email-domain-not-allowed
+                title: Домен пошти не дозволено
+                status: 422
+                detail: Реєстрація можлива лише з корпоративної пошти закладу.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            pdfNoText:
+              summary: PDF без текстового шару
+              value:
+                type: /problems/pdf-no-text-layer
+                title: PDF без текстового шару
+                status: 422
+                detail: Документ не містить текстового шару; потрібен PDF з текстом, не скан.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            pdfTooLong:
+              summary: PDF завеликий за обсягом тексту
+              value:
+                type: /problems/pdf-too-long
+                title: Документ завеликий
+                status: 422
+                detail: Документ містить 74 сторінки; ліміт 60 сторінок або 40 000 токенів.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            attemptExpired:
+              summary: Час спроби минув
+              value:
+                type: /problems/attempt-expired
+                title: Час спроби минув
+                status: 422
+                detail: Відповідь отримано після deadlineAt спроби.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            optionMismatch:
+              summary: Варіант не належить питанню
+              value:
+                type: /problems/option-not-in-question
+                title: Невідповідний варіант
+                status: 422
+                detail: Варіант не належить питанню спроби.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            inviteInvalid:
+              summary: Код запрошення недійсний
+              value:
+                type: /problems/invite-code-invalid
+                title: Код запрошення недійсний
+                status: 422
+                detail: Код не існує, відкликаний або строк його дії минув.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            planEmpty:
+              summary: План на день порожній
+              value:
+                type: /problems/plan-empty
+                title: План на день порожній
+                status: 422
+                detail: На сьогодні немає тем для повторення або схвалених питань.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            insufficientPool:
+              summary: Недостатньо схвалених питань
+              value:
+                type: /problems/insufficient-question-pool
+                title: Недостатньо схвалених питань
+                status: 422
+                detail: Для теми і типу single потрібно 10 схвалених питань, наявно 6.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            passwordTooCommon:
+              summary: Поширений пароль
+              value:
+                type: /problems/password-too-common
+                title: Пароль занадто поширений
+                status: 422
+                detail: Пароль входить до переліку поширених паролів; оберіть інший.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            idempotencyMismatch:
+              summary: Ключ ідемпотентності з іншим тілом
+              value:
+                type: /problems/idempotency-key-mismatch
+                title: Невідповідність ключа ідемпотентності
+                status: 422
+                detail: Idempotency-Key уже використано з іншим тілом запиту.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+    TooManyRequests:
+      description: Перевищено ліміт запитів (SRS-NFR-SEC-08) або добовий ліміт вартості генерації (SRS-NFR-COST-02).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            rateLimit:
+              summary: Ліміт запитів
+              value:
+                type: /problems/rate-limited
+                title: Забагато запитів
+                status: 429
+                detail: Ліміт 100 запитів/хв вичерпано.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+            budget:
+              summary: Добовий ліміт вартості
+              value:
+                type: /problems/budget-exceeded
+                title: Добовий ліміт вартості вичерпано
+                status: 429
+                detail: Нові задачі генерації приймаються після 00:00 UTC.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+    InternalError:
+      description: Непередбачена помилка сервера; деталі лише в журналі за requestId.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            internal:
+              summary: Внутрішня помилка
+              value:
+                type: /problems/internal-error
+                title: Внутрішня помилка сервера
+                status: 500
+                detail: Запит не виконано; зверніться до адміністратора з requestId.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+    ServiceUnavailable:
+      description: PostgreSQL або Redis тимчасово недоступні.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          examples:
+            unavailable:
+              summary: Залежність недоступна
+              value:
+                type: /problems/service-unavailable
+                title: Сервіс тимчасово недоступний
+                status: 503
+                detail: Черга задач недоступна; повторіть запит пізніше.
+                instance: /api/v1/courses/0190f3a2-7c1e-7d4a-9b2f-3c5d6e7f8a91
+                requestId: req-7f3a9c2e
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+  schemas:
+    Problem:
+      type: object
+      description: Опис помилки за RFC 9457 (application/problem+json). Члени-розширення дозволені стандартом.
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          maxLength: 200
+          description: Ідентифікатор типу помилки, відносний URI каталогу /problems/.
+        title:
+          type: string
+          maxLength: 200
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          maxLength: 1000
+        instance:
+          type: string
+          format: uri-reference
+          maxLength: 500
+        requestId:
+          type: string
+          maxLength: 64
+          description: Ідентифікатор запиту з журналу (SRS-NFR-OBS-01).
+        errors:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - pointer
+              - detail
+            properties:
+              pointer:
+                type: string
+                maxLength: 200
+                description: JSON Pointer (RFC 6901) на поле запиту.
+              detail:
+                type: string
+                maxLength: 500
+          minItems: 1
+          maxItems: 50
+        attemptId:
+          type: string
+          format: uuid
+          description: "Член-розширення типу attempt-in-progress: ідентифікатор незавершеної спроби для її продовження."
+    CourseRole:
+      type: string
+      enum:
+        - owner
+        - co_instructor
+        - student
+      description: ENUM course_role. Роль користувача в курсі.
+    ControlEventType:
+      type: string
+      enum:
+        - current
+        - module
+        - credit
+        - exam
+      description: ENUM control_event_type. Тип контрольного заходу.
+    QuestionType:
+      type: string
+      enum:
+        - single
+        - multi
+      description: ENUM question_type. single — один правильний варіант, multi — один або більше.
+    QuestionStatus:
+      type: string
+      enum:
+        - draft
+        - approved
+        - rejected
+      description: ENUM question_status. Життєвий цикл питання.
+    QuestionSource:
+      type: string
+      enum:
+        - lecture
+        - source_test
+        - manual
+      description: ENUM question_source. Джерело питання.
+    AttemptMode:
+      type: string
+      enum:
+        - daily_plan
+        - practice
+        - mock_test
+      description: ENUM attempt_mode. Режим спроби.
+    AttemptStatus:
+      type: string
+      enum:
+        - in_progress
+        - finished
+        - expired
+      description: ENUM attempt_status. Стан спроби.
+    AttemptEventType:
+      type: string
+      enum:
+        - app_background
+        - app_foreground
+        - screenshot
+        - screen_recording
+      description: ENUM attempt_event_type. Подія антисписування.
+    GenerationJobType:
+      type: string
+      enum:
+        - lecture_test
+        - mock_questions
+      description: ENUM generation_job_type. Тип задачі генерації.
+    GenerationJobStatus:
+      type: string
+      enum:
+        - queued
+        - processing
+        - done
+        - failed
+        - dead
+      description: ENUM generation_job_status. Стан задачі генерації.
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+        - password
+        - displayName
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: Корпоративна пошта закладу; домен перевіряється за ALLOWED_EMAIL_DOMAINS.
+        password:
+          type: string
+          format: password
+          minLength: 10
+          maxLength: 128
+          writeOnly: true
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Ім'я або псевдонім.
+    EmailRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: Корпоративна пошта закладу; домен перевіряється за ALLOWED_EMAIL_DOMAINS.
+    EmailTokenRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          pattern: ^[A-Za-z0-9_-]{43}$
+          minLength: 43
+          maxLength: 43
+          description: Одноразовий токен з фрагмента посилання в листі (#token=…; 32 випадкові байти, base64url). Фрагмент URL не надсилається на сервер.
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: Корпоративна пошта закладу; домен перевіряється за ALLOWED_EMAIL_DOMAINS.
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 128
+          writeOnly: true
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - refreshToken
+      properties:
+        refreshToken:
+          type: string
+          pattern: ^[A-Za-z0-9_-]{43}$
+          minLength: 43
+          maxLength: 43
+    PasswordResetConfirm:
+      type: object
+      additionalProperties: false
+      required:
+        - token
+        - newPassword
+      properties:
+        token:
+          type: string
+          pattern: ^[A-Za-z0-9_-]{43}$
+          minLength: 43
+          maxLength: 43
+        newPassword:
+          type: string
+          format: password
+          minLength: 10
+          maxLength: 128
+          writeOnly: true
+    TokenPair:
+      type: object
+      additionalProperties: false
+      required:
+        - tokenType
+        - accessToken
+        - expiresIn
+        - refreshToken
+        - refreshExpiresIn
+      properties:
+        tokenType:
+          type: string
+          enum:
+            - Bearer
+        accessToken:
+          type: string
+          maxLength: 2048
+          pattern: ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$
+          description: JWT, HS256, строк дії 15 хв (SRS-NFR-SEC-01).
+        expiresIn:
+          type: integer
+          enum:
+            - 900
+          description: Строк дії access-токена, с.
+        refreshToken:
+          type: string
+          pattern: ^[A-Za-z0-9_-]{43}$
+          minLength: 43
+          maxLength: 43
+          description: Непрозорий refresh-токен; у БД зберігається SHA-256. Ротація при кожному оновленні (SRS-NFR-SEC-02).
+        refreshExpiresIn:
+          type: integer
+          enum:
+            - 2592000
+          description: Строк дії refresh-токена, с (30 днів).
+    AccountDeletion:
+      type: object
+      additionalProperties: false
+      required:
+        - password
+      properties:
+        password:
+          type: string
+          format: password
+          minLength: 1
+          maxLength: 128
+          writeOnly: true
+          description: Поточний пароль для повторної автентифікації перед незворотною дією.
+    UserProfile:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - email
+        - displayName
+        - emailVerified
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: Корпоративна пошта закладу; домен перевіряється за ALLOWED_EMAIL_DOMAINS.
+        displayName:
+          type: string
+          maxLength: 64
+        emailVerified:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+    Course:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - myRole
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        myRole:
+          $ref: "#/components/schemas/CourseRole"
+        createdAt:
+          type: string
+          format: date-time
+    CourseCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        topics:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - title
+            properties:
+              title:
+                type: string
+                minLength: 1
+                maxLength: 200
+          minItems: 0
+          maxItems: 100
+      description: Курс із назвою дисципліни і впорядкованим переліком тем (SRS-FUN-07).
+    CourseUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+    CoursePage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - page
+        - limit
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Course"
+          minItems: 0
+          maxItems: 100
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+    Member:
+      type: object
+      additionalProperties: false
+      required:
+        - userId
+        - displayName
+        - role
+        - joinedAt
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          maxLength: 64
+        role:
+          $ref: "#/components/schemas/CourseRole"
+        joinedAt:
+          type: string
+          format: date-time
+    MemberPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - page
+        - limit
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Member"
+          minItems: 0
+          maxItems: 100
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+    InviteCodeCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - role
+      properties:
+        role:
+          type: string
+          enum:
+            - co_instructor
+            - student
+          description: "Підмножина course_role: owner через код не призначається."
+        expiresInDays:
+          type: integer
+          minimum: 1
+          maximum: 30
+          default: 7
+    InviteCode:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - code
+        - role
+        - expiresAt
+        - revokedAt
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          pattern: ^[A-HJ-NP-Z2-9]{8}$
+          minLength: 8
+          maxLength: 8
+        role:
+          type: string
+          enum:
+            - co_instructor
+            - student
+          description: "Підмножина course_role: owner через код не призначається."
+        expiresAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+    InviteCodePage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - page
+        - limit
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InviteCode"
+          minItems: 0
+          maxItems: 100
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+    MembershipCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+      properties:
+        code:
+          type: string
+          pattern: ^[A-HJ-NP-Z2-9]{8}$
+          minLength: 8
+          maxLength: 8
+    Membership:
+      type: object
+      additionalProperties: false
+      required:
+        - courseId
+        - courseTitle
+        - role
+        - joinedAt
+      properties:
+        courseId:
+          type: string
+          format: uuid
+        courseTitle:
+          type: string
+          minLength: 1
+          maxLength: 200
+        role:
+          $ref: "#/components/schemas/CourseRole"
+        joinedAt:
+          type: string
+          format: date-time
+    Topic:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - position
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        position:
+          type: integer
+          minimum: 1
+          maximum: 500
+    TopicCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        position:
+          type: integer
+          minimum: 1
+          maximum: 500
+          description: За відсутності — в кінець переліку.
+    TopicUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 200
+        position:
+          type: integer
+          minimum: 1
+          maximum: 500
+      minProperties: 1
+    TopicList:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Topic"
+          minItems: 0
+          maxItems: 500
+    ControlEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - type
+        - eventDate
+        - topicIds
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: "#/components/schemas/ControlEventType"
+        eventDate:
+          type: string
+          format: date
+        topicIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+    ControlEventCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - eventDate
+        - topicIds
+      properties:
+        type:
+          $ref: "#/components/schemas/ControlEventType"
+        eventDate:
+          type: string
+          format: date
+        topicIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+    ControlEventUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        type:
+          $ref: "#/components/schemas/ControlEventType"
+        eventDate:
+          type: string
+          format: date
+        topicIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 100
+          uniqueItems: true
+      minProperties: 1
+    ControlEventPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - page
+        - limit
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ControlEvent"
+          minItems: 0
+          maxItems: 100
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+    LectureMaterialUpload:
+      type: object
+      additionalProperties: false
+      required:
+        - file
+      properties:
+        file:
+          type: string
+          format: binary
+          maxLength: 10485760
+          description: PDF ≤ 10 МБ (10 485 760 байт), сигнатура %PDF, ≤ 60 сторінок, ≤ 40 000 токенів тексту (SRS-NFR-SEC-07, SRS-FUN-51).
+    LectureMaterial:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - topicId
+        - fileName
+        - sizeBytes
+        - pageCount
+        - textTokens
+        - uploadedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        topicId:
+          type: string
+          format: uuid
+        fileName:
+          type: string
+          maxLength: 255
+        sizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 10485760
+        pageCount:
+          type: integer
+          minimum: 1
+          maximum: 60
+        textTokens:
+          type: integer
+          minimum: 1
+          maximum: 40000
+        uploadedAt:
+          type: string
+          format: date-time
+    LectureMaterialPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - page
+        - limit
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/LectureMaterial"
+          minItems: 0
+          maxItems: 100
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+    SourceTestStructureItem:
+      type: object
+      additionalProperties: false
+      required:
+        - topicId
+        - questionType
+        - questionCount
+      properties:
+        topicId:
+          type: string
+          format: uuid
+        questionType:
+          $ref: "#/components/schemas/QuestionType"
+        questionCount:
+          type: integer
+          minimum: 1
+          maximum: 100
+    SourceTestUpload:
+      type: object
+      additionalProperties: false
+      required:
+        - file
+        - timeLimitMinutes
+        - structure
+      properties:
+        file:
+          type: string
+          format: binary
+          maxLength: 10485760
+          description: PDF ≤ 10 МБ (10 485 760 байт), сигнатура %PDF, ≤ 60 сторінок, ≤ 40 000 токенів тексту (SRS-NFR-SEC-07, SRS-FUN-51).
+        timeLimitMinutes:
+          type: integer
+          minimum: 1
+          maximum: 240
+        structure:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceTestStructureItem"
+          minItems: 1
+          maxItems: 200
+          description: Структура зразка «тема × тип → кількість» (SRS-FUN-34); частина multipart з типом application/json.
+    SourceTest:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - controlEventId
+        - timeLimitMinutes
+        - pageCount
+        - structure
+        - uploadedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        controlEventId:
+          type: string
+          format: uuid
+        timeLimitMinutes:
+          type: integer
+          minimum: 1
+          maximum: 240
+        pageCount:
+          type: integer
+          minimum: 1
+          maximum: 60
+        structure:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceTestStructureItem"
+          minItems: 1
+          maxItems: 200
+        uploadedAt:
+          type: string
+          format: date-time
+      description: Метадані зразка; вміст файлу через API не повертається (SRS-FUN-11).
+    SourceTestPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - page
+        - limit
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SourceTest"
+          minItems: 0
+          maxItems: 100
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+    LectureTestJobCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - lectureMaterialId
+      properties:
+        type:
+          type: string
+          enum:
+            - lecture_test
+        lectureMaterialId:
+          type: string
+          format: uuid
+    MockQuestionsJobCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - sourceTestId
+      properties:
+        type:
+          type: string
+          enum:
+            - mock_questions
+        sourceTestId:
+          type: string
+          format: uuid
+    GenerationJobCreate:
+      oneOf:
+        - $ref: "#/components/schemas/LectureTestJobCreate"
+        - $ref: "#/components/schemas/MockQuestionsJobCreate"
+      discriminator:
+        propertyName: type
+        mapping:
+          lecture_test: "#/components/schemas/LectureTestJobCreate"
+          mock_questions: "#/components/schemas/MockQuestionsJobCreate"
+    GenerationJob:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - courseId
+        - type
+        - status
+        - generationNo
+        - attemptsMade
+        - error
+        - draftsCount
+        - createdAt
+        - startedAt
+        - finishedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        courseId:
+          type: string
+          format: uuid
+        type:
+          $ref: "#/components/schemas/GenerationJobType"
+        status:
+          $ref: "#/components/schemas/GenerationJobStatus"
+        generationNo:
+          type: integer
+          minimum: 1
+          maximum: 32767
+        attemptsMade:
+          type: integer
+          minimum: 0
+          maximum: 3
+        error:
+          type: string
+          maxLength: 1000
+          nullable: true
+        draftsCount:
+          type: integer
+          minimum: 0
+          maximum: 32767
+        createdAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+          nullable: true
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+    QuestionOption:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - text
+        - isCorrect
+        - position
+      properties:
+        id:
+          type: string
+          format: uuid
+        text:
+          type: string
+          minLength: 1
+          maxLength: 500
+        isCorrect:
+          type: boolean
+        position:
+          type: integer
+          minimum: 1
+          maximum: 8
+    QuestionOptionInput:
+      type: object
+      additionalProperties: false
+      required:
+        - text
+        - isCorrect
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 500
+        isCorrect:
+          type: boolean
+    Question:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - topicId
+        - type
+        - status
+        - source
+        - stem
+        - explanation
+        - options
+        - version
+        - generationJobId
+        - rejectReason
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        topicId:
+          type: string
+          format: uuid
+        type:
+          $ref: "#/components/schemas/QuestionType"
+        status:
+          $ref: "#/components/schemas/QuestionStatus"
+        source:
+          $ref: "#/components/schemas/QuestionSource"
+        stem:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        explanation:
+          type: string
+          maxLength: 2000
+          nullable: true
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuestionOption"
+          minItems: 2
+          maxItems: 8
+        version:
+          type: integer
+          minimum: 1
+          description: Версія для оптимістичного блокування; розбіжність → 409.
+        generationJobId:
+          type: string
+          format: uuid
+          nullable: true
+        rejectReason:
+          type: string
+          maxLength: 500
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      description: Подання питання для owner і co_instructor; містить ознаку правильності варіантів.
+    QuestionPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - page
+        - limit
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Question"
+          minItems: 0
+          maxItems: 100
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+    QuestionUpdate:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: Версія для оптимістичного блокування; розбіжність → 409.
+        topicId:
+          type: string
+          format: uuid
+        type:
+          $ref: "#/components/schemas/QuestionType"
+        stem:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        explanation:
+          type: string
+          maxLength: 2000
+          nullable: true
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuestionOptionInput"
+          minItems: 2
+          maxItems: 8
+      minProperties: 2
+      description: Редагування чернетки; single — рівно один правильний варіант, multi — щонайменше один.
+    QuestionApproval:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: Версія для оптимістичного блокування; розбіжність → 409.
+    QuestionRejection:
+      type: object
+      additionalProperties: false
+      required:
+        - version
+        - reason
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: Версія для оптимістичного блокування; розбіжність → 409.
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+    DailyPlanTopic:
+      type: object
+      additionalProperties: false
+      required:
+        - courseId
+        - topicId
+        - topicTitle
+        - priority
+        - overdueDays
+        - daysToEvent
+        - questionCount
+        - nextReview
+      properties:
+        courseId:
+          type: string
+          format: uuid
+        topicId:
+          type: string
+          format: uuid
+        topicTitle:
+          type: string
+          minLength: 1
+          maxLength: 200
+        priority:
+          type: number
+          minimum: 0
+          description: P := d_overdue + 10 / max(1, d_event).
+        overdueDays:
+          type: integer
+          minimum: 0
+        daysToEvent:
+          type: integer
+          minimum: 0
+          nullable: true
+        questionCount:
+          type: integer
+          minimum: 2
+          maximum: 8
+        nextReview:
+          type: string
+          format: date
+    DailyPlan:
+      type: object
+      additionalProperties: false
+      required:
+        - date
+        - totalQuestions
+        - topics
+      properties:
+        date:
+          type: string
+          format: date
+        totalQuestions:
+          type: integer
+          minimum: 0
+          maximum: 30
+        topics:
+          type: array
+          items:
+            $ref: "#/components/schemas/DailyPlanTopic"
+          minItems: 0
+          maxItems: 15
+    DailyPlanAttemptCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - mode
+      properties:
+        mode:
+          type: string
+          enum:
+            - daily_plan
+    PracticeAttemptCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - mode
+        - courseId
+        - topicId
+      properties:
+        mode:
+          type: string
+          enum:
+            - practice
+        courseId:
+          type: string
+          format: uuid
+        topicId:
+          type: string
+          format: uuid
+    MockTestAttemptCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - mode
+        - courseId
+        - controlEventId
+      properties:
+        mode:
+          type: string
+          enum:
+            - mock_test
+        courseId:
+          type: string
+          format: uuid
+        controlEventId:
+          type: string
+          format: uuid
+    AttemptCreate:
+      oneOf:
+        - $ref: "#/components/schemas/DailyPlanAttemptCreate"
+        - $ref: "#/components/schemas/PracticeAttemptCreate"
+        - $ref: "#/components/schemas/MockTestAttemptCreate"
+      discriminator:
+        propertyName: mode
+        mapping:
+          daily_plan: "#/components/schemas/DailyPlanAttemptCreate"
+          practice: "#/components/schemas/PracticeAttemptCreate"
+          mock_test: "#/components/schemas/MockTestAttemptCreate"
+    AttemptQuestionOption:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - text
+      properties:
+        id:
+          type: string
+          format: uuid
+        text:
+          type: string
+          minLength: 1
+          maxLength: 500
+    AttemptQuestion:
+      type: object
+      additionalProperties: false
+      required:
+        - questionId
+        - topicId
+        - position
+        - type
+        - stem
+        - options
+      properties:
+        questionId:
+          type: string
+          format: uuid
+        topicId:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 1
+          maximum: 100
+        type:
+          $ref: "#/components/schemas/QuestionType"
+        stem:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttemptQuestionOption"
+          minItems: 2
+          maxItems: 8
+      description: Питання спроби без ознаки правильної відповіді; порядок питань і варіантів рандомізовано (SRS-FUN-13, SRS-FUN-14).
+    AnswerSubmit:
+      type: object
+      additionalProperties: false
+      required:
+        - questionId
+        - optionIds
+      properties:
+        questionId:
+          type: string
+          format: uuid
+        optionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+    RecordedAnswer:
+      type: object
+      additionalProperties: false
+      required:
+        - questionId
+        - optionIds
+        - answeredAt
+      properties:
+        questionId:
+          type: string
+          format: uuid
+        optionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+        answeredAt:
+          type: string
+          format: date-time
+    AnswerAccepted:
+      type: object
+      additionalProperties: false
+      required:
+        - questionId
+        - optionIds
+        - answeredAt
+        - answeredCount
+        - totalQuestions
+      properties:
+        questionId:
+          type: string
+          format: uuid
+        optionIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+        answeredAt:
+          type: string
+          format: date-time
+        answeredCount:
+          type: integer
+          minimum: 1
+          maximum: 100
+        totalQuestions:
+          type: integer
+          minimum: 1
+          maximum: 100
+      description: Підтвердження фіксації без ознаки правильності (SRS-FUN-14).
+    TopicResult:
+      type: object
+      additionalProperties: false
+      required:
+        - topicId
+        - correct
+        - total
+        - quality
+        - ef
+        - intervalDays
+        - repetitions
+        - nextReview
+      properties:
+        topicId:
+          type: string
+          format: uuid
+        correct:
+          type: integer
+          minimum: 0
+          maximum: 100
+        total:
+          type: integer
+          minimum: 1
+          maximum: 100
+        quality:
+          type: integer
+          minimum: 0
+          maximum: 5
+          description: Оцінка q за табл. А.1 (SRS-FUN-17).
+        ef:
+          type: number
+          minimum: 1.3
+          maximum: 9.99
+          multipleOf: 0.01
+        intervalDays:
+          type: integer
+          minimum: 0
+        repetitions:
+          type: integer
+          minimum: 0
+        nextReview:
+          type: string
+          format: date
+    AttemptResult:
+      type: object
+      additionalProperties: false
+      required:
+        - correctCount
+        - totalQuestions
+        - topics
+      properties:
+        correctCount:
+          type: integer
+          minimum: 0
+          maximum: 100
+        totalQuestions:
+          type: integer
+          minimum: 1
+          maximum: 100
+        topics:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopicResult"
+          minItems: 1
+          maxItems: 100
+    Attempt:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - mode
+        - status
+        - courseId
+        - controlEventId
+        - startedAt
+        - deadlineAt
+        - finishedAt
+        - questions
+        - answers
+      properties:
+        id:
+          type: string
+          format: uuid
+        mode:
+          $ref: "#/components/schemas/AttemptMode"
+        status:
+          $ref: "#/components/schemas/AttemptStatus"
+        courseId:
+          type: string
+          format: uuid
+          nullable: true
+        controlEventId:
+          type: string
+          format: uuid
+          nullable: true
+        startedAt:
+          type: string
+          format: date-time
+        deadlineAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttemptQuestion"
+          minItems: 1
+          maxItems: 100
+        answers:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecordedAnswer"
+          minItems: 0
+          maxItems: 100
+        result:
+          allOf:
+            - $ref: "#/components/schemas/AttemptResult"
+          description: Результат; присутній лише після завершення спроби.
+    AttemptEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - clientEventId
+        - type
+        - occurredAt
+      properties:
+        clientEventId:
+          type: string
+          format: uuid
+          description: Ідентифікатор події на клієнті; повторна доставка не створює запису (SRS-FUN-38).
+        type:
+          $ref: "#/components/schemas/AttemptEventType"
+        occurredAt:
+          type: string
+          format: date-time
+        durationMs:
+          type: integer
+          minimum: 0
+          maximum: 86400000
+          nullable: true
+    AttemptEventBatch:
+      type: object
+      additionalProperties: false
+      required:
+        - events
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttemptEvent"
+          minItems: 1
+          maxItems: 100
+    AttemptEventBatchResult:
+      type: object
+      additionalProperties: false
+      required:
+        - accepted
+        - duplicates
+      properties:
+        accepted:
+          type: integer
+          minimum: 0
+          maximum: 100
+        duplicates:
+          type: integer
+          minimum: 0
+          maximum: 100
+    MockTestPublish:
+      type: object
+      additionalProperties: false
+      required:
+        - sourceTestId
+      properties:
+        sourceTestId:
+          type: string
+          format: uuid
+    MockTest:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - controlEventId
+        - controlEventType
+        - eventDate
+        - timeLimitMinutes
+        - questionCount
+        - publishedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        controlEventId:
+          type: string
+          format: uuid
+        controlEventType:
+          $ref: "#/components/schemas/ControlEventType"
+        eventDate:
+          type: string
+          format: date
+        timeLimitMinutes:
+          type: integer
+          minimum: 1
+          maximum: 240
+        questionCount:
+          type: integer
+          minimum: 1
+          maximum: 100
+        publishedAt:
+          type: string
+          format: date-time
+    MockTestPage:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+        - page
+        - limit
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MockTest"
+          minItems: 0
+          maxItems: 100
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+    HeatmapCell:
+      type: object
+      additionalProperties: false
+      required:
+        - topicId
+        - mastery
+        - answered
+        - confirmed
+      properties:
+        topicId:
+          type: string
+          format: uuid
+        mastery:
+          type: number
+          minimum: 0
+          maximum: 1
+          nullable: true
+        answered:
+          type: integer
+          minimum: 0
+        confirmed:
+          type: boolean
+    HeatmapRow:
+      type: object
+      additionalProperties: false
+      required:
+        - userId
+        - displayName
+        - cells
+      properties:
+        userId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          maxLength: 64
+        cells:
+          type: array
+          items:
+            $ref: "#/components/schemas/HeatmapCell"
+          minItems: 0
+          maxItems: 500
+    Heatmap:
+      type: object
+      additionalProperties: false
+      required:
+        - topics
+        - items
+        - page
+        - limit
+        - total
+      properties:
+        topics:
+          type: array
+          items:
+            $ref: "#/components/schemas/Topic"
+          minItems: 0
+          maxItems: 500
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/HeatmapRow"
+          minItems: 0
+          maxItems: 100
+        page:
+          type: integer
+          minimum: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+      description: Засвоєння «студент × тема» як частка правильних відповідей (SRS-FUN-46); рядки — студенти з пагінацією.
+    MasteryConfirmation:
+      type: object
+      additionalProperties: false
+      required:
+        - userId
+        - topicId
+        - confirmedBy
+        - confirmedAt
+      properties:
+        userId:
+          type: string
+          format: uuid
+        topicId:
+          type: string
+          format: uuid
+        confirmedBy:
+          type: string
+          format: uuid
+        confirmedAt:
+          type: string
+          format: date-time
