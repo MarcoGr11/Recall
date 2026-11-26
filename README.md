@@ -27,7 +27,7 @@
 - [docs/2_design.md](docs/2_design.md) — Розділ 2. Обґрунтування архітектурних рішень та проєктування системи
 - [docs/api/openapi.yaml](docs/api/openapi.yaml) — контракт REST API (OpenAPI 3.0.3, підрозділ 2.5)
 - [docs/5_references.md](docs/5_references.md) — список використаних джерел (ДСТУ 8302:2015)
-- Зведений документ Розділів 1–2 (Google Docs): [F2_Diploma_Chapters1-2_Бабин](https://docs.google.com/document/d/1cggdDRN1Fyxuz36UEJYFpk_HaHJx-QDhXFZh2BcgLK8/edit?tab=t.0)
+- Зведений документ Розділів 1–2 (Google Docs): [F2_Diploma_Chapters1-2_Бабин](https://docs.google.com/document/d/1kLpzdrHnIufA5V_VBXau9-CJ9mRlKUySJoB9tkEq4zQ/edit?tab=t.0#heading=h.uani66ddjo0l)
 
 Документацію на кожному Pull Request перевіряє Docs Quality Gate ([.github/workflows/docs-linter.yml](.github/workflows/docs-linter.yml)): markdownlint і Vale. Локальна перевірка:
 
